@@ -1,0 +1,233 @@
+{
+  "App": {
+    "Name": "Windows FPS Optimizer",
+    "Version": "1.0.1",
+    "SchemaVersion": 1,
+    "Language": "pt-BR",
+    "DefaultSimulation": true,
+    "DefaultReadOnly": false,
+    "MetricsRefreshSeconds": 2,
+    "MinimumWindowsBuild": 10240
+  },
+  "Safety": {
+    "ProtectedProcesses": [
+      "Idle", "System", "Registry", "smss", "csrss", "wininit", "services",
+      "lsass", "svchost", "winlogon", "fontdrvhost", "dwm", "explorer",
+      "sihost", "taskhostw", "audiodg", "MsMpEng", "SecurityHealthService",
+      "SearchHost", "StartMenuExperienceHost", "ShellExperienceHost"
+    ],
+    "ProtectedProcessPatterns": [
+      "(?i)exitlag",
+      "(?i)(vpn|wireguard|openvpn|tailscale|zerotier|hamachi|cloudflare.*warp)"
+    ],
+    "ProtectedServices": [
+      "RpcSs", "DcomLaunch", "RpcEptMapper", "PlugPlay", "EventLog", "WinDefend",
+      "WdNisSvc", "SecurityHealthService", "wuauserv", "BITS", "CryptSvc", "AppXSvc",
+      "ClipSVC", "InstallService", "AudioSrv", "AudioEndpointBuilder", "ProfSvc",
+      "Schedule", "Power", "Winmgmt", "TrustedInstaller", "gpsvc", "UserManager",
+      "SamSs", "KeyIso", "mpssvc", "BFE", "Dhcp", "Dnscache", "NlaSvc",
+      "netprofm", "WlanSvc", "LanmanWorkstation", "LanmanServer", "TokenBroker"
+    ],
+    "ProtectedTaskPathPatterns": [
+      "\\Microsoft\\Windows\\WindowsUpdate\\",
+      "\\Microsoft\\Windows\\UpdateOrchestrator\\",
+      "\\Microsoft\\Windows\\Windows Defender\\",
+      "\\Microsoft\\Windows\\Servicing\\",
+      "\\Microsoft\\Windows\\Chkdsk\\",
+      "\\Microsoft\\Windows\\WaaSMedic\\",
+      "\\Microsoft\\Windows\\CertificateServicesClient\\"
+    ],
+    "ProtectedAppxPatterns": [
+      "Microsoft.WindowsStore", "Microsoft.StorePurchaseApp", "Microsoft.SecHealthUI",
+      "Microsoft.DesktopAppInstaller", "Microsoft.GamingServices", "Microsoft.Xbox",
+      "Microsoft.VCLibs", "Microsoft.NET.Native", "Microsoft.UI.Xaml",
+      "Microsoft.WindowsAppRuntime", "Microsoft.WinUI", "Microsoft.AAD.BrokerPlugin",
+      "Microsoft.AccountsControl", "Microsoft.Windows.CloudExperienceHost",
+      "Microsoft.Windows.ShellExperienceHost", "Microsoft.Windows.StartMenuExperienceHost"
+    ],
+    "BlockedFileRoots": [
+      "%USERPROFILE%\\Downloads", "%USERPROFILE%\\Documents", "%USERPROFILE%\\Desktop",
+      "%USERPROFILE%\\Pictures", "%USERPROFILE%\\Videos", "%USERPROFILE%\\Music"
+    ]
+  },
+  "OptionalServices": [
+    {
+      "Name": "Spooler",
+      "Title": "Spooler de impressao",
+      "Description": "Gerencia filas de impressao e impressoras virtuais.",
+      "Benefit": "Evita atividade do spooler quando nenhuma impressora e usada.",
+      "Problems": "Impressao, Microsoft Print to PDF e alguns aplicativos podem falhar.",
+      "Restart": "Nao normalmente",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "Fax",
+      "Title": "Fax",
+      "Description": "Permite enviar e receber fax pelo Windows.",
+      "Benefit": "Remove um servico raramente utilizado.",
+      "Problems": "Recursos de fax deixam de funcionar.",
+      "Restart": "Nao",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "bthserv",
+      "Title": "Suporte a Bluetooth",
+      "Description": "Descobre e associa dispositivos Bluetooth.",
+      "Benefit": "Pode reduzir atividade se o computador nunca usa Bluetooth.",
+      "Problems": "Controles, headsets, teclado e mouse Bluetooth podem desconectar.",
+      "Restart": "Reconectar dispositivos pode ser necessario",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "MapsBroker",
+      "Title": "Mapas baixados",
+      "Description": "Mantem mapas offline usados por aplicativos.",
+      "Benefit": "Evita manutencao de mapas quando o recurso nao e usado.",
+      "Problems": "Mapas offline e aplicativos dependentes podem deixar de atualizar.",
+      "Restart": "Nao",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "lfsvc",
+      "Title": "Geolocalizacao",
+      "Description": "Fornece localizacao a aplicativos autorizados.",
+      "Benefit": "Reduz atividade de localizacao quando desnecessaria.",
+      "Problems": "Clima, mapas e automacoes por localizacao podem perder precisao.",
+      "Restart": "Nao",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "TabletInputService",
+      "Title": "Teclado virtual e manuscrito",
+      "Description": "Atende entrada por toque, caneta e teclado virtual.",
+      "Benefit": "Pode reduzir atividade em desktops sem toque/caneta.",
+      "Problems": "Entrada por toque, caneta e teclado virtual pode parar.",
+      "Restart": "Logoff pode ser necessario",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "WbioSrvc",
+      "Title": "Biometria do Windows",
+      "Description": "Atende leitores de impressao digital e Windows Hello biometrico.",
+      "Benefit": "Remove atividade se nenhum recurso biometrico e usado.",
+      "Problems": "Login por impressao digital/rosto pode deixar de funcionar.",
+      "Restart": "Logoff pode ser necessario",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "RetailDemo",
+      "Title": "Demonstracao comercial",
+      "Description": "Suporta o modo de demonstracao usado em lojas.",
+      "Benefit": "Evita um recurso sem utilidade em computadores pessoais.",
+      "Problems": "Modo de demonstracao comercial fica indisponivel.",
+      "Restart": "Nao",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "XblAuthManager",
+      "Title": "Autenticacao Xbox Live",
+      "Description": "Autentica jogos e recursos Xbox Live.",
+      "Benefit": "Somente para quem nao usa jogos Xbox, Store ou Game Pass.",
+      "Problems": "Login, conquistas e jogos da Store/Game Pass podem falhar.",
+      "Restart": "Reabrir o jogo",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    },
+    {
+      "Name": "XboxGipSvc",
+      "Title": "Gerenciamento de acessorios Xbox",
+      "Description": "Gerencia alguns controles e acessorios Xbox.",
+      "Benefit": "Nenhum beneficio relevante se acessorios Xbox sao usados.",
+      "Problems": "Controles e acessorios Xbox podem parar de funcionar.",
+      "Restart": "Reconectar pode ser necessario",
+      "AutoRestoreInGameSession": true,
+      "DefaultSelected": false
+    }
+  ],
+  "OptionalScheduledTasks": [
+    {
+      "TaskPath": "\\Microsoft\\Windows\\Application Experience\\",
+      "TaskName": "Microsoft Compatibility Appraiser",
+      "Description": "Coleta inventario de compatibilidade para atualizacoes.",
+      "Benefit": "Evita execucao periodica do inventario quando selecionado.",
+      "Problems": "Pode reduzir informacoes de compatibilidade usadas pelo Windows Setup.",
+      "DefaultSelected": false
+    },
+    {
+      "TaskPath": "\\Microsoft\\Windows\\Application Experience\\",
+      "TaskName": "ProgramDataUpdater",
+      "Description": "Atualiza dados de compatibilidade de programas.",
+      "Benefit": "Evita atividade periodica pequena.",
+      "Problems": "Diagnostico de compatibilidade pode ficar menos atual.",
+      "DefaultSelected": false
+    },
+    {
+      "TaskPath": "\\Microsoft\\Windows\\Customer Experience Improvement Program\\",
+      "TaskName": "Consolidator",
+      "Description": "Consolida dados opcionais do programa de experiencia do cliente.",
+      "Benefit": "Reduz coleta opcional agendada.",
+      "Problems": "Dados opcionais de diagnostico deixam de ser enviados.",
+      "DefaultSelected": false
+    },
+    {
+      "TaskPath": "\\Microsoft\\Windows\\Customer Experience Improvement Program\\",
+      "TaskName": "UsbCeip",
+      "Description": "Coleta estatisticas opcionais de dispositivos USB.",
+      "Benefit": "Evita uma tarefa de telemetria opcional.",
+      "Problems": "Nenhum impacto funcional esperado; a tarefa pode reaparecer em updates.",
+      "DefaultSelected": false
+    }
+  ],
+  "OptionalAppxPatterns": [
+    "Microsoft.BingWeather", "Microsoft.GetHelp", "Microsoft.Getstarted",
+    "Microsoft.MicrosoftSolitaireCollection", "Microsoft.People", "Microsoft.WindowsMaps",
+    "Microsoft.ZuneMusic", "Microsoft.ZuneVideo", "Clipchamp.Clipchamp",
+    "Microsoft.Todos", "MSTeams"
+  ],
+  "CommonGameFolders": [
+    "%ProgramFiles(x86)%\\Steam\\steamapps\\common",
+    "%ProgramFiles%\\Epic Games",
+    "%ProgramFiles%\\EA Games",
+    "%ProgramFiles(x86)%\\Origin Games",
+    "%ProgramFiles%\\GOG Galaxy\\Games",
+    "%ProgramFiles%\\XboxGames"
+  ],
+  "Analysis": {
+    "Thresholds": {
+      "StartupGood": 8,
+      "StartupWarning": 15,
+      "ProcessesGood": 120,
+      "ProcessesWarning": 190,
+      "IdleCpuGoodPercent": 5,
+      "IdleCpuWarningPercent": 12,
+      "RamGoodPercent": 55,
+      "RamWarningPercent": 75,
+      "DiskFreeGoodPercent": 20,
+      "DiskFreeWarningPercent": 10,
+      "BackgroundAppsGood": 5,
+      "BackgroundAppsWarning": 15
+    },
+    "Weights": {
+      "Startup": 12,
+      "Processes": 10,
+      "Cpu": 12,
+      "Ram": 12,
+      "DiskFree": 10,
+      "PowerPlan": 8,
+      "GameMode": 8,
+      "Capture": 8,
+      "OptionalServices": 6,
+      "VisualEffects": 6,
+      "BackgroundApps": 4,
+      "Integrity": 4
+    }
+  }
+}

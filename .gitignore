@@ -1,0 +1,18 @@
+# Arquivos gerados pelo build e instaladores compilados
+.build/
+dist/
+
+# Logs e dados locais de execução
+Data/Logs/
+*.log
+*.jsonl
+
+# Configuração local de agentes e ferramentas
+.agents/
+.codex/
+
+# Arquivos temporários e do sistema
+*.tmp
+*.bak
+Thumbs.db
+Desktop.ini
