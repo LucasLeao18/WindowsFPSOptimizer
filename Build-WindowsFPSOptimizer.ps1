@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$OutputDirectory,
     [switch]$SkipValidation,
@@ -7,8 +7,9 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -ne 'Desktop') { throw 'Execute o build com Windows PowerShell 5.1.' }
 
-# O build usa apenas IExpress, o compilador .NET Framework e APIs inclusas no
+# O build usa ZIP, o compilador .NET Framework e APIs inclusas no
 # Windows. O launcher final exige UAC antes de extrair o payload PowerShell.
 
 function Assert-NoReparsePointPath {
@@ -58,30 +59,6 @@ function Assert-ChildPath {
     [void](Assert-NoReparsePointPath -Path $ParentPath)
     [void](Assert-NoReparsePointPath -Path $childFull)
     return $childFull
-}
-
-function ConvertTo-SedString {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyString()]
-        [string]$Value
-    )
-
-    if ($Value.IndexOfAny(@([char]"`r", [char]"`n")) -ge 0) {
-        throw 'Valores SED nao podem conter quebras de linha.'
-    }
-    $sedEncoding = [Text.Encoding]::Default
-    $roundTrip = $sedEncoding.GetString($sedEncoding.GetBytes($Value))
-    if ($roundTrip -cne $Value) {
-        throw (
-            "O valor '$Value' nao pode ser representado pela pagina de codigo " +
-            'ANSI exigida pelo IExpress neste computador.'
-        )
-    }
-
-    # IExpress usa aspas duplas para valores que podem conter espacos.
-    return '"' + $Value.Replace('"', '""') + '"'
 }
 
 function Get-PeMachine {
@@ -387,7 +364,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $projectRoot 'dist'
 }
 $buildRoot = Assert-ChildPath -ParentPath $projectRoot -ChildPath (
-    Join-Path $projectRoot '.build\IExpress'
+    Join-Path $projectRoot '.build\Native'
 )
 $packageDirectory = Assert-ChildPath -ParentPath $buildRoot -ChildPath (
     Join-Path $buildRoot 'Package'
@@ -401,12 +378,14 @@ if (Test-Path -LiteralPath $buildRoot -PathType Container) {
 
 $configPath = Join-Path $projectRoot 'Config.json'
 $installerScriptPath = Join-Path $projectRoot 'Installer\Install-WindowsFPSOptimizer.ps1'
-$installerLauncherPath = Join-Path $projectRoot 'Installer\Run-Installer.cmd'
+$appLauncherSourcePath = Join-Path $projectRoot 'Installer\AppLauncher.cs'
+$appManifestPath = Join-Path $projectRoot 'Installer\AppLauncher.manifest'
 $setupLauncherSourcePath = Join-Path $projectRoot 'Installer\SetupLauncher.cs'
 $setupManifestPath = Join-Path $projectRoot 'Installer\SetupLauncher.manifest'
 $validationScriptPath = Join-Path $projectRoot 'Tests\Validate-Project.ps1'
 $asyncUiTestPath = Join-Path $projectRoot 'Tests\Test-AsyncUiRunspace.ps1'
 $performanceTestPath = Join-Path $projectRoot 'Tests\Test-PerformanceImprovements.ps1'
+$experienceTestPath = Join-Path $projectRoot 'Tests\Test-SimplifiedExperience.ps1'
 $runtimeFiles = @(
     'WindowsFPSOptimizer.ps1',
     'MainWindow.xaml',
@@ -438,7 +417,8 @@ if (-not (Test-Path -LiteralPath $installerScriptPath -PathType Leaf)) {
     throw 'O bootstrap Installer\Install-WindowsFPSOptimizer.ps1 nao foi encontrado.'
 }
 foreach ($requiredInstallerFile in @(
-    $installerLauncherPath,
+    $appLauncherSourcePath,
+    $appManifestPath,
     $setupLauncherSourcePath,
     $setupManifestPath
 )) {
@@ -459,12 +439,14 @@ foreach ($relativePath in $runtimeFiles) {
 # pacote diferente daquele que acabou de ser validado.
 $buildInputPaths = @(
     $installerScriptPath,
-    $installerLauncherPath,
+    $appLauncherSourcePath,
+    $appManifestPath,
     $setupLauncherSourcePath,
     $setupManifestPath,
     $validationScriptPath,
     $asyncUiTestPath,
-    $performanceTestPath
+    $performanceTestPath,
+    $experienceTestPath
 ) + @($runtimeFiles | ForEach-Object { Join-Path $projectRoot $_ })
 $buildInputFingerprints = @{}
 foreach ($inputPath in $buildInputPaths) {
@@ -490,18 +472,9 @@ $assemblyVersion = '{0}.{1}.{2}.0' -f (
 $trustedSystemDirectory = [Environment]::SystemDirectory
 $trustedWindowsRoot = Split-Path -Parent $trustedSystemDirectory
 $nativePowerShell = Join-Path $trustedSystemDirectory 'WindowsPowerShell\v1.0\powershell.exe'
-$iexpressPath = if ([Environment]::Is64BitOperatingSystem) {
-    Join-Path $trustedWindowsRoot 'SysWOW64\iexpress.exe'
-}
-else {
-    Join-Path $trustedSystemDirectory 'iexpress.exe'
-}
 $cscPath = Join-Path $trustedWindowsRoot 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $nativePowerShell -PathType Leaf)) {
     throw 'Windows PowerShell 5.1 nao foi encontrado.'
-}
-if (-not (Test-Path -LiteralPath $iexpressPath -PathType Leaf)) {
-    throw 'IExpress nao esta disponivel nesta instalacao do Windows.'
 }
 if (-not (Test-Path -LiteralPath $cscPath -PathType Leaf)) {
     throw 'O compilador nativo do .NET Framework 4 nao foi encontrado.'
@@ -544,6 +517,8 @@ if (-not $SkipValidation) {
     if ($LASTEXITCODE -ne 0) {
         throw "O teste de desempenho falhou com o codigo $LASTEXITCODE."
     }
+    & $nativePowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $experienceTestPath
+    if ($LASTEXITCODE -ne 0) { throw 'Falha nos testes da interface simplificada.' }
 }
 
 [void](New-Item -ItemType Directory -Path $buildRoot -Force)
@@ -567,16 +542,10 @@ $resolvedOutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 [void](Assert-NoReparsePointPath -Path $resolvedOutputDirectory)
 
 $packageInstallerName = 'Install-WindowsFPSOptimizer.ps1'
-$packageLauncherName = 'Run-Installer.cmd'
 Copy-VerifiedBuildInput `
     -SourcePath $installerScriptPath `
     -DestinationPath (Join-Path $packageDirectory $packageInstallerName) `
     -ExpectedSha256 ([string]$buildInputFingerprints[[IO.Path]::GetFullPath($installerScriptPath)])
-Copy-VerifiedBuildInput `
-    -SourcePath $installerLauncherPath `
-    -DestinationPath (Join-Path $packageDirectory $packageLauncherName) `
-    -ExpectedSha256 ([string]$buildInputFingerprints[[IO.Path]::GetFullPath($installerLauncherPath)])
-
 foreach ($relativePath in $runtimeFiles) {
     $runtimeSourcePath = [IO.Path]::GetFullPath((Join-Path $projectRoot $relativePath))
     Copy-VerifiedBuildInput `
@@ -602,7 +571,26 @@ Copy-VerifiedBuildInput `
 $setupLauncherSourcePath = $stagedLauncherSourcePath
 $setupManifestPath = $stagedSetupManifestPath
 
-$manifestFiles = foreach ($fileName in @($packageInstallerName, $packageLauncherName) + $runtimeFiles) {
+# O WinExe hospeda o motor do Windows PowerShell na propria thread STA.
+$stagedAppSource = Join-Path $compilerInputDirectory 'AppLauncher.cs'
+$stagedAppManifest = Join-Path $compilerInputDirectory 'AppLauncher.manifest'
+Copy-VerifiedBuildInput -SourcePath $appLauncherSourcePath -DestinationPath $stagedAppSource `
+    -ExpectedSha256 ([string]$buildInputFingerprints[[IO.Path]::GetFullPath($appLauncherSourcePath)])
+Copy-VerifiedBuildInput -SourcePath $appManifestPath -DestinationPath $stagedAppManifest `
+    -ExpectedSha256 ([string]$buildInputFingerprints[[IO.Path]::GetFullPath($appManifestPath)])
+$appLauncherSourcePath = $stagedAppSource
+$appManifestPath = $stagedAppManifest
+$appLauncherText = [IO.File]::ReadAllText($appLauncherSourcePath).Replace('__ASSEMBLY_VERSION__', $assemblyVersion)
+$generatedAppSource = Join-Path $compilerInputDirectory 'AppLauncher.generated.cs'
+[IO.File]::WriteAllText($generatedAppSource, $appLauncherText, [Text.UTF8Encoding]::new($true))
+$appLauncherPath = Join-Path $packageDirectory 'WindowsFPSOptimizer.exe'
+& $cscPath /nologo /target:winexe /platform:anycpu /optimize+ /warnaserror+ `
+    /reference:System.Windows.Forms.dll "/reference:$([PowerShell].Assembly.Location)" `
+    "/win32manifest:$appManifestPath" "/out:$appLauncherPath" $generatedAppSource
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar o aplicativo grafico.' }
+$packageRuntimeFiles = @($runtimeFiles) + 'WindowsFPSOptimizer.exe'
+
+$manifestFiles = foreach ($fileName in @($packageInstallerName) + $packageRuntimeFiles) {
     $flatName = [IO.Path]::GetFileName($fileName)
     $packagePath = Join-Path $packageDirectory $flatName
     $item = Get-Item -LiteralPath $packagePath
@@ -624,152 +612,20 @@ $manifestOutputPath = Join-Path $packageDirectory 'PackageManifest.json'
 $packageManifest | ConvertTo-Json -Depth 5 |
     Set-Content -LiteralPath $manifestOutputPath -Encoding UTF8
 
-$packageFileNames = @($packageInstallerName, $packageLauncherName) + $runtimeFiles + 'PackageManifest.json'
 $artifactFileName = "WindowsFPSOptimizer-{0}-Setup.exe" -f $version
 $targetExePath = Join-Path $resolvedOutputDirectory $artifactFileName
 $targetHashPath = $targetExePath + '.sha256.txt'
 $targetBuildInfoPath = Join-Path $resolvedOutputDirectory 'WindowsFPSOptimizer-BuildInfo.json'
-$innerExePath = Join-Path $stagedOutputDirectory 'WindowsFPSOptimizer-InnerSetup.exe'
 $stagedExePath = Join-Path $stagedOutputDirectory $artifactFileName
 $stagedHashPath = $stagedExePath + '.sha256.txt'
 $stagedBuildInfoPath = Join-Path $stagedOutputDirectory 'WindowsFPSOptimizer-BuildInfo.json'
-$sedPath = Join-Path $buildRoot 'WindowsFPSOptimizer.sed'
+$innerExePath = Join-Path $stagedOutputDirectory 'WindowsFPSOptimizer-Payload.zip'
 
-$sedLines = New-Object 'System.Collections.Generic.List[string]'
-$sedLines.Add('[Version]')
-$sedLines.Add('Class=IEXPRESS')
-$sedLines.Add('SEDVersion=3')
-$sedLines.Add('[Options]')
-$sedLines.Add('PackagePurpose=InstallApp')
-$sedLines.Add('ShowInstallProgramWindow=0')
-$sedLines.Add('HideExtractAnimation=0')
-$sedLines.Add('UseLongFileName=1')
-$sedLines.Add('InsideCompressed=0')
-$sedLines.Add('CAB_FixedSize=0')
-$sedLines.Add('CAB_ResvCodeSigning=0')
-$sedLines.Add('RebootMode=N')
-$sedLines.Add('InstallPrompt=%InstallPrompt%')
-$sedLines.Add('DisplayLicense=')
-$sedLines.Add('FinishMessage=%FinishMessage%')
-$sedLines.Add('TargetName=%TargetName%')
-$sedLines.Add('FriendlyName=%FriendlyName%')
-$sedLines.Add('AppLaunched=%AppLaunched%')
-$sedLines.Add('PostInstallCmd=<None>')
-$sedLines.Add('AdminQuietInstCmd=')
-$sedLines.Add('UserQuietInstCmd=')
-$sedLines.Add('SourceFiles=SourceFiles')
-$sedLines.Add('[Strings]')
-$sedLines.Add('InstallPrompt=' + (ConvertTo-SedString -Value ''))
-$sedLines.Add('FinishMessage=' + (ConvertTo-SedString -Value ''))
-$sedLines.Add('TargetName=' + (ConvertTo-SedString -Value $innerExePath))
-$sedLines.Add('FriendlyName=' + (ConvertTo-SedString -Value "$appName $version"))
-$innerLaunchCommand = 'cmd.exe /d /e:on /c {0}' -f $packageLauncherName
-$sedLines.Add(
-    'AppLaunched=' +
-    (ConvertTo-SedString -Value $innerLaunchCommand)
-)
-
-for ($index = 0; $index -lt $packageFileNames.Count; $index++) {
-    $sedLines.Add(
-        ('FILE{0}={1}' -f $index, (ConvertTo-SedString -Value $packageFileNames[$index]))
-    )
-}
-
-$sedLines.Add('[SourceFiles]')
-$sedLines.Add('SourceFiles0=' + (ConvertTo-SedString -Value $packageDirectory))
-$sedLines.Add('[SourceFiles0]')
-for ($index = 0; $index -lt $packageFileNames.Count; $index++) {
-    $sedLines.Add(('%FILE{0}%=' -f $index))
-}
-
-$sedLines | Set-Content -LiteralPath $sedPath -Encoding Default
-
-Write-Host "Gerando payload IExpress protegido..."
-& $iexpressPath /N /Q $sedPath
-$iexpressInitialExitCode = if (Test-Path -LiteralPath Variable:\LASTEXITCODE) {
-    $LASTEXITCODE
-}
-else {
-    'indisponivel'
-}
-
-# Em algumas versoes do Windows, IExpress retorna antes de concluir a gravacao
-# feita pelo processo auxiliar. Aguarde ate o tamanho ficar estavel.
-$buildDeadline = [DateTime]::UtcNow.AddSeconds(30)
-$lastObservedLength = -1L
-$stableObservations = 0
-while ([DateTime]::UtcNow -lt $buildDeadline -and $stableObservations -lt 3) {
-    if (Test-Path -LiteralPath $innerExePath -PathType Leaf) {
-        $currentLength = (Get-Item -LiteralPath $innerExePath).Length
-        if ($currentLength -gt 0 -and $currentLength -eq $lastObservedLength) {
-            $stableObservations++
-        }
-        else {
-            $stableObservations = 0
-            $lastObservedLength = $currentLength
-        }
-    }
-    Start-Sleep -Milliseconds 200
-}
-
-if (-not (Test-Path -LiteralPath $innerExePath -PathType Leaf)) {
-    throw "IExpress terminou sem criar o payload EXE esperado. Codigo inicial: $iexpressInitialExitCode."
-}
-if ($stableObservations -lt 3) {
-    throw 'O payload IExpress nao ficou estavel dentro do tempo limite de build.'
-}
-if ($iexpressInitialExitCode -ne 0) {
-    throw "IExpress retornou o codigo de falha $iexpressInitialExitCode."
-}
-if ((Get-PeMachine -Path $innerExePath) -ne 0x014C) {
-    throw 'O payload IExpress nao e compativel com Windows x86.'
-}
-
-# Execute o proprio pacote em modo de validacao: isso comprova que o comando
-# interno, o CMD, o PowerShell 5.1 e os hashes do manifesto funcionam juntos.
-$innerValidationDirectory = Assert-ChildPath -ParentPath $buildRoot -ChildPath (
-    Join-Path $buildRoot 'InnerValidation'
-)
-[void](New-Item -ItemType Directory -Path $innerValidationDirectory -Force)
-$validationEnvironmentNames = @(
-    'TEMP',
-    'TMP',
-    'WFPO_NATIVE_POWERSHELL',
-    'WFPO_INSTALL_VALIDATE_ONLY'
-)
-$savedValidationEnvironment = @{}
-foreach ($environmentName in $validationEnvironmentNames) {
-    $savedValidationEnvironment[$environmentName] = [Environment]::GetEnvironmentVariable(
-        $environmentName,
-        'Process'
-    )
-}
-try {
-    [Environment]::SetEnvironmentVariable('TEMP', $innerValidationDirectory, 'Process')
-    [Environment]::SetEnvironmentVariable('TMP', $innerValidationDirectory, 'Process')
-    [Environment]::SetEnvironmentVariable('WFPO_NATIVE_POWERSHELL', $nativePowerShell, 'Process')
-    [Environment]::SetEnvironmentVariable('WFPO_INSTALL_VALIDATE_ONLY', '1', 'Process')
-    $innerValidationProcess = Start-Process `
-        -FilePath $innerExePath `
-        -WorkingDirectory $innerValidationDirectory `
-        -WindowStyle Hidden `
-        -Wait `
-        -PassThru `
-        -ErrorAction Stop
-    if ($innerValidationProcess.ExitCode -ne 0) {
-        throw "A validacao executavel do payload falhou com o codigo $($innerValidationProcess.ExitCode)."
-    }
-}
-finally {
-    foreach ($environmentName in $validationEnvironmentNames) {
-        [Environment]::SetEnvironmentVariable(
-            $environmentName,
-            $savedValidationEnvironment[$environmentName],
-            'Process'
-        )
-    }
-}
-
+Write-Host 'Validando o pacote sem instalar...'
+& $nativePowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $packageDirectory $packageInstallerName) -ValidateOnly -Quiet
+if ($LASTEXITCODE -ne 0) { throw 'O pacote falhou na validacao do manifesto.' }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::CreateFromDirectory($packageDirectory, $innerExePath)
 $innerHash = (Get-FileHash -LiteralPath $innerExePath -Algorithm SHA256).Hash
 $launcherTemplate = Get-Content -LiteralPath $setupLauncherSourcePath -Raw -Encoding UTF8
 $generatedLauncherSource = $launcherTemplate.
@@ -794,6 +650,8 @@ $compilerArguments = @(
     ('/resource:{0},WindowsFPSOptimizer.Payload' -f $innerExePath),
     '/reference:System.Windows.Forms.dll',
     '/reference:System.Security.dll',
+    '/reference:System.IO.Compression.dll',
+    '/reference:System.IO.Compression.FileSystem.dll',
     ('/out:{0}' -f $stagedExePath),
     $generatedLauncherPath
 )
@@ -828,7 +686,7 @@ if (
 }
 
 # Carregue uma copia em memoria somente para confirmar que o recurso embutido
-# possui exatamente o mesmo SHA-256 do IExpress validado.
+# possui exatamente o mesmo SHA-256 do ZIP validado.
 $launcherBytes = [IO.File]::ReadAllBytes($stagedExePath)
 $launcherAssembly = [Reflection.Assembly]::Load($launcherBytes)
 $portableKinds = [Reflection.PortableExecutableKinds]0
@@ -855,7 +713,7 @@ finally {
     $payloadStream.Dispose()
 }
 if ($embeddedHash -ne $innerHash) {
-    throw 'O hash do payload embutido diverge do IExpress validado.'
+    throw 'O hash do payload embutido diverge do ZIP validado.'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)) {
@@ -894,6 +752,8 @@ $artifactInfo = [ordered]@{
     }
     BootstrapMachine = 'I386-AnyCPU32BitPreferred'
     RequiresAdministrator = $true
+    PayloadFormat = 'ZIP'
+    ConsoleWindows = $false
     InnerPayloadSha256 = $innerHash
     BuiltAtUtc = [DateTime]::UtcNow.ToString('o')
 }

@@ -1,6 +1,6 @@
-# Windows FPS Optimizer
+﻿# Windows FPS Optimizer
 
-[Baixar instalador EXE v1.1.0](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/download/v1.1.0/WindowsFPSOptimizer-1.1.0-Setup.exe) · [Releases e hashes](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases) · [Histórico de mudanças](CHANGELOG.md)
+[Baixar instalador EXE v1.2.0](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/download/v1.2.0/WindowsFPSOptimizer-1.2.0-Setup.exe) · [Releases e hashes](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases) · [Histórico de mudanças](CHANGELOG.md)
 
 Aplicativo gráfico, local e offline para analisar e ajustar o próprio Windows 10 ou Windows 11 antes de jogos. Ele foi escrito em Windows PowerShell 5.1, usa WPF e não depende de módulos de terceiros.
 
@@ -9,6 +9,24 @@ O objetivo é reduzir trabalho dispensável em segundo plano, manter configuraç
 > **Segurança por padrão:** `Config.json` inicia o aplicativo em modo de simulação. Abrir o programa normalmente não aplica mudanças. Alterações reais são permitidas somente na cópia instalada pelo `Setup.exe` sob `Program Files`; depois disso ainda é necessário desativar a simulação, confirmar as ações e aceitar UAC quando solicitado.
 
 As releases incluem instalador, SHA-256, metadados do build e código-fonte. O workflow `Windows build and installer validation` compila em Windows Server 2022 e testa o EXE final em um runner descartável: instalação silenciosa (`/quiet`), código de saída e hashes de todos os arquivos instalados. O modo silencioso mantém a exigência de administrador e as verificações do instalador. O EXE não recebe assinatura Authenticode quando um certificado não é fornecido ao build.
+
+## Primeira abertura e interface simplificada (1.2.0)
+
+Abra pelo atalho criado pelo instalador. A aplicação abre como uma janela gráfica própria, sem terminal. Na primeira abertura, uma apresentação de três etapas explica teste, aplicação e restauração e permite escolher entre interface simplificada e avançada. É possível voltar, pular e reabrir a apresentação pelo botão **Primeiros passos**.
+
+A escolha de interface e a conclusão da apresentação ficam em `State/ui-preferences.json`, por usuário. Preferências ausentes ou inválidas recuperam a interface simples e a apresentação. Essas preferências visuais são salvas mesmo em simulação; não alteram configurações do Windows.
+
+Na interface simplificada há três presets:
+
+| Preset | Comportamento |
+|---|---|
+| **Seguro** | Padrão recomendado: Game Mode/capturas compatíveis e visuais equilibrados; preserva energia, programas e serviços. |
+| **Equilibrado** | Inclui o Seguro e devolve a paginação ao gerenciamento do Windows. Pode exigir reinicialização. Não herda seleções de serviços, tarefas ou inicialização do modo avançado. |
+| **Máximo FPS** | Pede um executável de jogo. Aplica prioridade AboveNormal, energia e visuais temporários e restaura ao terminar. Oferece **Encerrar e restaurar sessão** durante o jogo. Não herda a lista avançada de serviços. |
+
+**Testar sem alterar** executa o preset em simulação. **Aplicar** pede confirmação, solicita UAC quando necessário e aplica com backup; essa ação explícita sai da simulação para a operação. **Desfazer última otimização** restaura o último backup reversível, preservando conflitos posteriores. Configurações que exigem ação manual ficam acessíveis pelos botões de Modo de Jogo e Capturas.
+
+O botão no topo alterna as interfaces. A tela simples carrega métricas e backups; o inventário completo é consultado ao entrar no modo avançado. Nenhum preset promete aumento de FPS.
 
 ## Limites do projeto
 
@@ -140,7 +158,8 @@ UIController.psm1             Dispatcher fechado entre a interface e os módulos
 Build-WindowsFPSOptimizer.ps1 Build validado, assinatura opcional e publicação transacional
 Installer\SetupLauncher.cs    Bootstrap UAC com payload incorporado e verificado
 Installer\SetupLauncher.manifest Manifesto requireAdministrator e compatibilidade
-Installer\Run-Installer.cmd   Seleção segura do Windows PowerShell nativo
+Installer\AppLauncher.cs     Aplicativo WinExe com motor integrado, sem console
+Installer\AppLauncher.manifest Execução normal; UAC somente para ações reais
 Installer\Install-WindowsFPSOptimizer.ps1 Instalação, ACL, atalhos e rollback
 ```
 
@@ -622,7 +641,7 @@ O script primeiro executa `Tests\Validate-Project.ps1` no Windows PowerShell
 Ao abrir o EXE, o bootstrap:
 
 - solicita UAC pelo manifesto do próprio EXE, antes de qualquer extração;
-- extrai o IExpress embutido somente em uma pasta protegida sob `Program Files`;
+- extrai o ZIP embutido somente em uma pasta protegida sob `Program Files`, validando nomes, limites e hashes;
 - confere o SHA-256 do payload incorporado;
 - valida tamanho e SHA-256 de cada arquivo antes de instalar;
 - faz uma troca segura por diretório, preservando a versão anterior se a
@@ -645,21 +664,8 @@ repositório pessoal do Windows:
 .\Build-WindowsFPSOptimizer.ps1 -CodeSigningCertificateThumbprint 'THUMBPRINT'
 ```
 
-### PS2EXE opcional — não incluído
+O aplicativo gráfico `WindowsFPSOptimizer.exe` hospeda o motor do Windows PowerShell 5.1 em uma thread STA no próprio processo. O instalador usa um ZIP incorporado e chama o script de instalação sem criar console. Não há dependência de CMD, IExpress ou PS2EXE. Consultas e ferramentas nativas também executam sem janela de console.
 
-PS2EXE é uma ferramenta de terceiros. Instalação e auditoria ficam a cargo do mantenedor; o aplicativo nunca a baixa. Um exemplo, após instalar conscientemente o módulo, é:
-
-```powershell
-Invoke-ps2exe .\WindowsFPSOptimizer.ps1 .\WindowsFPSOptimizer.exe -noConsole -STA -requireAdmin
-```
-
-O executável resultante não incorpora automaticamente `MainWindow.xaml`,
-`Config.json` e os módulos. Parâmetros e comportamento também variam por
-versão do PS2EXE. Por isso, o launcher com payload IExpress incorporado,
-incluído no projeto, é o método suportado.
-
-O payload IExpress não transforma PowerShell em código nativo; o launcher
-compilado apenas protege e coordena a instalação.
 Sem um certificado confiável, o EXE pode receber aviso do SmartScreen ou do
 antivírus. Isso não deve ser contornado: distribuições públicas devem assinar o
 artefato e publicar o SHA-256.

@@ -337,19 +337,16 @@ function New-OptimizerShortcut {
         [void](New-Item -ItemType Directory -Path $shortcutDirectory -Force)
     }
 
-    # O atalho e aberto pelo Explorer de 64 bits; por isso, System32 e o destino
-    # persistente correto, independentemente da arquitetura do instalador.
     $nativeSystemDirectory = [Environment]::SystemDirectory
-    $shortcutPowerShell = Join-Path $nativeSystemDirectory 'WindowsPowerShell\v1.0\powershell.exe'
-    $mainScript = Join-Path $ApplicationDirectory 'WindowsFPSOptimizer.ps1'
-    $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "{0}"' -f $mainScript.Replace('"', '""')
+    $appLauncher = Join-Path $ApplicationDirectory 'WindowsFPSOptimizer.exe'
+    if (-not (Test-Path -LiteralPath $appLauncher -PathType Leaf)) { throw 'Aplicativo grafico ausente.' }
 
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $null
     try {
         $shortcut = $shell.CreateShortcut($ShortcutPath)
-        $shortcut.TargetPath = $shortcutPowerShell
-        $shortcut.Arguments = $arguments
+        $shortcut.TargetPath = $appLauncher
+        $shortcut.Arguments = ''
         $shortcut.WorkingDirectory = $ApplicationDirectory
         $shortcut.Description = 'Otimizador seguro do Windows para jogos'
         $shortcut.WindowStyle = 1

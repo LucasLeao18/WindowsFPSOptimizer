@@ -2,11 +2,36 @@
 
 Set-StrictMode -Version Latest
 
+function Get-OptimizerUiPreferences {
+    [CmdletBinding()]
+    param()
+    $default = [pscustomobject]@{ SchemaVersion = 1; OnboardingCompleted = $false; Interface = 'Simple' }
+    $path = Join-Path (Get-OptimizerContext).StateRoot 'ui-preferences.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $default }
+    try {
+        $saved = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($saved.SchemaVersion -ne 1 -or $saved.OnboardingCompleted -isnot [bool] -or $saved.Interface -notin @('Simple', 'Advanced')) { return $default }
+        return $saved
+    }
+    catch { return $default }
+}
+
+function Set-OptimizerUiPreferences {
+    [CmdletBinding()]
+    param([ValidateSet('Simple', 'Advanced')][string]$Interface, [bool]$OnboardingCompleted)
+    # Preferencias da interface nao sao ajustes do Windows: persistem em simulacao.
+    $path = Join-Path (Get-OptimizerContext).StateRoot 'ui-preferences.json'
+    Save-OptimizerJsonFile -Path $path -InputObject ([ordered]@{
+        SchemaVersion = 1; Interface = $Interface; OnboardingCompleted = $OnboardingCompleted
+    }) | Out-Null
+}
+
 function Test-UiGameSessionAction {
     [CmdletBinding()]
     param([string]$ActionId, [hashtable]$Parameters = @{})
     return ($ActionId -in @('StartGameSession', 'InvokeGameProfile') -or
-        ($ActionId -eq 'ApplyProfile' -and $Parameters.ContainsKey('Name') -and $Parameters.Name -eq 'MaximumFPS'))
+        ($ActionId -eq 'ApplyProfile' -and $Parameters.ContainsKey('Name') -and $Parameters.Name -eq 'MaximumFPS') -or
+        ($ActionId -eq 'SimpleOptimize' -and $Parameters.ContainsKey('Preset') -and $Parameters.Preset -eq 'MaximumFPS'))
 }
 
 function Get-RequiredUiParameter {
@@ -150,6 +175,20 @@ function Invoke-UIAction {
 
     switch ($ActionId) {
         'InitialData' { return Get-UiInitialData }
+        'SimpleInitialData' {
+            return [pscustomobject]@{ Metrics = Get-LivePerformanceMetrics; Backups = @(Get-OptimizerBackups) }
+        }
+        'SimpleOptimize' {
+            $preset = if ($Parameters.ContainsKey('Preset')) { [string]$Parameters.Preset } else { 'Safe' }
+            if ($preset -notin @('Safe', 'Balanced', 'MaximumFPS')) { throw 'Preset simplificado invalido.' }
+            if ($preset -ne 'Safe' -and -not (Get-OptimizerContext).Simulation -and -not [bool]$Parameters.Confirmed) { throw 'Confirme o preset antes de aplicar.' }
+            $executable = if ($Parameters.ContainsKey('GameExecutable')) { [string]$Parameters.GameExecutable } else { '' }
+            $changes = @(Invoke-OptimizationProfile -Name $preset -Confirmed -GameExecutable $executable)
+            return [pscustomobject]@{
+                Result = if ((Get-OptimizerContext).Simulation) { 'Simulated' } else { 'Completed' }
+                Preset = $preset; Changes = $changes
+            }
+        }
         'Analyze' { return Invoke-ComputerAnalysis }
         'CompareBenchmarks' {
             $before = Import-FrameTimeCapture -Path ([string](Get-RequiredUiParameter $Parameters 'BeforePath'))
@@ -388,4 +427,5 @@ function Invoke-UIAction {
     }
 }
 
-Export-ModuleMember -Function Invoke-UIAction, Get-UiInitialData, Restore-LatestOptimizerResource, Test-UiGameSessionAction
+Export-ModuleMember -Function Invoke-UIAction, Get-UiInitialData, Restore-LatestOptimizerResource, Test-UiGameSessionAction,
+    Get-OptimizerUiPreferences, Set-OptimizerUiPreferences

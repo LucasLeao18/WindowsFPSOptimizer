@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Reflection;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -81,7 +82,7 @@ namespace WindowsFPSOptimizer.Setup
 
                 string payloadPath = Path.Combine(
                     stagingDirectory,
-                    "WindowsFPSOptimizer-InnerSetup.exe");
+                    "WindowsFPSOptimizer-Payload.zip");
                 ExtractPayload(payloadPath);
                 ProtectFile(payloadPath);
 
@@ -95,10 +96,12 @@ namespace WindowsFPSOptimizer.Setup
                         "O payload interno falhou na verificacao SHA-256.");
                 }
 
+                ExtractPackage(payloadPath, stagingDirectory);
                 ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = payloadPath;
                 startInfo.WorkingDirectory = stagingDirectory;
                 startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
                 string windowsDirectory = Directory.GetParent(
                     Environment.SystemDirectory).FullName;
                 string nativePowerShell = Path.Combine(
@@ -117,8 +120,9 @@ namespace WindowsFPSOptimizer.Setup
                 startInfo.EnvironmentVariables["TMP"] = stagingDirectory;
                 startInfo.EnvironmentVariables["WINDIR"] = windowsDirectory;
                 startInfo.EnvironmentVariables["SystemRoot"] = windowsDirectory;
-                startInfo.EnvironmentVariables["WFPO_NATIVE_POWERSHELL"] =
-                    nativePowerShell;
+                startInfo.FileName = nativePowerShell;
+                startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File \"" +
+                    Path.Combine(stagingDirectory, "Install-WindowsFPSOptimizer.ps1") + "\" -NoLaunch -Quiet";
                 startInfo.EnvironmentVariables["WFPO_INSTALL_SESSION"] = session;
 
                 int innerExitCode;
@@ -186,12 +190,12 @@ namespace WindowsFPSOptimizer.Setup
                     installRoot,
                     "App",
                     AppVersion,
-                    "WindowsFPSOptimizer.ps1");
+                    "WindowsFPSOptimizer.exe");
                 EnsureSafeChild(installRoot, installedScript);
                 if (!File.Exists(installedScript))
                 {
                     throw new FileNotFoundException(
-                        "O script principal nao foi instalado.",
+                        "O aplicativo grafico nao foi instalado.",
                         installedScript);
                 }
 
@@ -247,6 +251,27 @@ namespace WindowsFPSOptimizer.Setup
             WindowsIdentity identity = WindowsIdentity.GetCurrent();
             WindowsPrincipal principal = new WindowsPrincipal(identity);
             return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+
+        private static void ExtractPackage(string path, string directory)
+        {
+            using (ZipArchive archive = ZipFile.OpenRead(path))
+            {
+                if (archive.Entries.Count < 1 || archive.Entries.Count > 100)
+                    throw new InvalidDataException("Pacote de instalacao invalido.");
+                foreach (ZipArchiveEntry entry in archive.Entries)
+                {
+                    // O formato do pacote e plano: nenhuma subpasta, ADS ou link.
+                    if (String.IsNullOrWhiteSpace(entry.FullName) || entry.FullName != entry.Name ||
+                        entry.Name.IndexOfAny(new char[] { '/', '\\', ':' }) >= 0 ||
+                        entry.Name == "." || entry.Name == ".." || entry.Length > 20 * 1024 * 1024)
+                        throw new InvalidDataException("Nome ou tamanho de arquivo invalido no pacote.");
+                    string destination = Path.GetFullPath(Path.Combine(directory, entry.Name));
+                    EnsureSafeChild(directory, destination);
+                    entry.ExtractToFile(destination, false);
+                    ProtectFile(destination);
+                }
+            }
         }
 
         private static string GetNativeProgramFiles()

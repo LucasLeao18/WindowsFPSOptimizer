@@ -1,5 +1,18 @@
 # Histórico de mudanças
 
+## 1.2.0 — 12/11/2026
+
+- Novo visual com cores, contraste, cartões de presets e hierarquia mais claros.
+- Interface simplificada com **Seguro**, **Equilibrado** e **Máximo FPS**, explicações, teste sem alterações e restauração pelo backup.
+- Máximo FPS simplificado permite escolher o executável do jogo e encerrar/restaurar a sessão.
+- Onboarding de três etapas na primeira abertura, com escolha de interface, opção de pular, voltar e reabrir em **Primeiros passos**.
+- Preferências da interface e conclusão do onboarding salvas por usuário, inclusive em simulação.
+- Carregamento inicial simplificado consulta apenas métricas e backups; o inventário completo é carregado ao entrar no modo avançado.
+- Aplicativo WinExe com motor do Windows PowerShell integrado ao próprio processo, sem janela de terminal.
+- Instalador com pacote ZIP validado, sem CMD ou IExpress; atalhos normais, UAC e atalhos de jogos usam o aplicativo gráfico.
+- Consultas e ferramentas nativas executadas sem console, com captura de saída e preservação dos códigos de erro.
+- Testes adicionais da experiência simplificada, dos três presets, das preferências e da execução nativa.
+
 ## 1.1.0 — 12/11/2026
 
 - Comparador de capturas CSV do PresentMon na página Início: FPS médio, 1% low, tempo médio/P95/P99 e pior quadro.

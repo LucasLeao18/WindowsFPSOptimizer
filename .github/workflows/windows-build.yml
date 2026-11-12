@@ -2,7 +2,7 @@ name: Windows build and installer validation
 
 on:
   push:
-    branches: [main, improvements/measured-gaming]
+    branches: [main, improvements/measured-gaming, improvements/simple-interface]
   pull_request:
   workflow_dispatch:
 
@@ -54,13 +54,18 @@ jobs:
           }
           if ($process.ExitCode -ne 0) { throw "Final installer failed: $($process.ExitCode)" }
           $installedRoot = Join-Path $env:ProgramFiles "WindowsFPSOptimizer\App\$version"
-          $manifest = Get-Content .\.build\IExpress\Package\PackageManifest.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content .\.build\Native\Package\PackageManifest.json -Raw | ConvertFrom-Json
           foreach ($file in $manifest.Files) {
             $installedPath = Join-Path $installedRoot $file.Path
             if ((Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash -ne $file.Sha256) {
               throw "Installed file mismatch: $($file.Path)"
             }
           }
+          $shell = New-Object -ComObject WScript.Shell
+          $shortcutPath = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Windows FPS Optimizer.lnk'
+          $shortcut = $shell.CreateShortcut($shortcutPath)
+          if ($shortcut.TargetPath -ne (Join-Path $installedRoot 'WindowsFPSOptimizer.exe')) { throw 'Shortcut does not target the graphical application' }
+          if (Get-ChildItem $installedRoot -Filter '*.cmd') { throw 'CMD file found in the installation' }
           Write-Host 'FINAL EXE VERIFIED: installation completed and installed files match the package manifest.'
 
       - name: Package source and provenance

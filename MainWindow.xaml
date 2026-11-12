@@ -2,24 +2,24 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
-        Title="Windows FPS Optimizer" Width="1100" Height="700"
+        Title="Windows FPS Optimizer" Width="1180" Height="800"
         MinWidth="820" MinHeight="560" WindowStartupLocation="CenterScreen" Language="pt-BR"
-        Background="#0B1220" Foreground="#F8FAFC" FontFamily="Segoe UI"
+        Background="#0C0F16" Foreground="#F1F5F9" FontFamily="Segoe UI"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
     <Window.Resources>
-        <SolidColorBrush x:Key="BackgroundBrush" Color="#0B1220"/>
-        <SolidColorBrush x:Key="SidebarBrush" Color="#0E1728"/>
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#111A2A"/>
-        <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#172033"/>
-        <SolidColorBrush x:Key="BorderBrush" Color="#334155"/>
-        <SolidColorBrush x:Key="PrimaryBrush" Color="#3B82F6"/>
-        <SolidColorBrush x:Key="PrimaryDarkBrush" Color="#1E40AF"/>
+        <SolidColorBrush x:Key="BackgroundBrush" Color="#0C0F16"/>
+        <SolidColorBrush x:Key="SidebarBrush" Color="#11151F"/>
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#171C28"/>
+        <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#202736"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="#303A4C"/>
+        <SolidColorBrush x:Key="PrimaryBrush" Color="#A3E635"/>
+        <SolidColorBrush x:Key="PrimaryDarkBrush" Color="#A3E635"/>
         <SolidColorBrush x:Key="AccentBrush" Color="#D97706"/>
         <SolidColorBrush x:Key="SuccessBrush" Color="#22C55E"/>
         <SolidColorBrush x:Key="WarningBrush" Color="#F59E0B"/>
         <SolidColorBrush x:Key="DangerBrush" Color="#EF4444"/>
-        <SolidColorBrush x:Key="TextBrush" Color="#F8FAFC"/>
-        <SolidColorBrush x:Key="MutedTextBrush" Color="#B6C2D1"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#F1F5F9"/>
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#A9B5C8"/>
 
         <Style x:Key="KeyboardFocusVisual">
             <Setter Property="Control.Template">
@@ -40,6 +40,7 @@
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisual}"/>
             <Setter Property="Template">
@@ -47,12 +48,12 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="#22304A"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="#1E40AF"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.88"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.72"/></Trigger>
                             <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.42"/><Setter Property="Cursor" Value="Arrow"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -63,6 +64,7 @@
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{StaticResource PrimaryDarkBrush}"/>
             <Setter Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/>
+            <Setter Property="Foreground" Value="#152009"/>
         </Style>
         <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="#4A1820"/>
@@ -80,7 +82,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="NavBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}">
+                                BorderThickness="1" CornerRadius="10" Padding="{TemplateBinding Padding}">
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets" FontSize="15"
@@ -102,9 +104,25 @@
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="16"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Padding" Value="20"/>
             <Setter Property="Margin" Value="0,0,12,12"/>
+        </Style>
+        <Style x:Key="PresetChoice" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisual}"/>
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+                <Border x:Name="ChoiceBorder" Background="#171E28" BorderBrush="#3A4653" BorderThickness="1" CornerRadius="12" Padding="18,14">
+                    <StackPanel><TextBlock Text="{TemplateBinding Content}" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="{TemplateBinding Tag}" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Margin="0,5,0,0" TextWrapping="Wrap"/></StackPanel>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsChecked" Value="True"><Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/><Setter TargetName="ChoiceBorder" Property="Background" Value="#2A3825"/></Trigger>
+                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#B5D28C"/></Trigger>
+                    <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ChoiceBorder" Property="Opacity" Value="0.4"/></Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate></Setter.Value></Setter>
         </Style>
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="18"/>
@@ -118,17 +136,17 @@
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="MinHeight" Value="44"/><Setter Property="Padding" Value="10,7"/>
-            <Setter Property="Margin" Value="0,0,8,8"/><Setter Property="Background" Value="#0D1626"/>
+            <Setter Property="Margin" Value="0,0,8,8"/><Setter Property="Background" Value="#111620"/>
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
             <Setter Property="CaretBrush" Value="White"/><Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisual}"/>
         </Style>
         <Style TargetType="ComboBox">
             <Setter Property="MinHeight" Value="44"/><Setter Property="Padding" Value="8,5"/><Setter Property="Margin" Value="0,0,8,8"/>
-            <Setter Property="Background" Value="#0D1626"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Background" Value="#111620"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/><Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisual}"/>
         </Style>
         <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="#F8FAFC"/><Setter Property="Foreground" Value="#0B1220"/>
+            <Setter Property="Background" Value="#F1F5F9"/><Setter Property="Foreground" Value="#0C0F16"/>
             <Setter Property="Padding" Value="8,6"/>
             <Style.Triggers>
                 <Trigger Property="IsHighlighted" Value="True"><Setter Property="Background" Value="#BFDBFE"/></Trigger>
@@ -144,7 +162,7 @@
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/><Setter Property="BorderThickness" Value="1"/>
             <Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HorizontalGridLinesBrush" Value="#27354A"/>
-            <Setter Property="RowBackground" Value="#111A2A"/><Setter Property="AlternatingRowBackground" Value="#141F31"/>
+            <Setter Property="RowBackground" Value="#171C28"/><Setter Property="AlternatingRowBackground" Value="#141F31"/>
             <Setter Property="HeadersVisibility" Value="Column"/><Setter Property="AutoGenerateColumns" Value="True"/>
             <Setter Property="IsReadOnly" Value="True"/><Setter Property="SelectionMode" Value="Extended"/>
             <Setter Property="CanUserAddRows" Value="False"/><Setter Property="EnableRowVirtualization" Value="True"/>
@@ -152,9 +170,9 @@
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
         </Style>
         <Style TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#172033"/><Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#202736"/><Setter Property="Foreground" Value="White"/>
             <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Padding" Value="10,8"/>
-            <Setter Property="BorderBrush" Value="#334155"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="BorderBrush" Value="#303A4C"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
         </Style>
         <Style TargetType="DataGridCell">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="Padding" Value="8,6"/>
@@ -162,15 +180,15 @@
         </Style>
         <Style TargetType="TabControl"><Setter Property="Background" Value="Transparent"/></Style>
         <Style TargetType="TabItem">
-            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="Background" Value="#172033"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="Background" Value="#202736"/>
             <Setter Property="Padding" Value="14,8"/><Setter Property="Margin" Value="0,0,4,0"/>
         </Style>
     </Window.Resources>
 
     <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition Width="244"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="244"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Background="{StaticResource SidebarBrush}" BorderBrush="#26354B" BorderThickness="0,0,1,0">
+        <Border x:Name="SidebarChrome" Grid.Column="0" Background="{StaticResource SidebarBrush}" BorderBrush="#273143" BorderThickness="0,0,1,0">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Top" Margin="18,18,18,12">
                     <TextBlock Text="Windows FPS" FontSize="20" FontWeight="Bold"/>
@@ -178,7 +196,7 @@
                     <TextBlock Text="Otimização local e reversível" Style="{StaticResource MutedText}" FontSize="11" Margin="0,6,0,0"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,14">
-                    <Border Background="#122136" CornerRadius="7" Padding="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <Border Background="#122136" CornerRadius="10" Padding="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
                         <StackPanel>
                             <TextBlock x:Name="AdminStatusText" Text="Permissões: verificando" FontSize="12"/>
                             <Button x:Name="BtnElevate" Content="Reiniciar como administrador" Margin="0,8,0,0" MinHeight="44"/>
@@ -210,10 +228,10 @@
             </DockPanel>
         </Border>
 
-        <Grid Grid.Column="1">
-            <Grid.RowDefinitions><RowDefinition Height="72"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="150"/></Grid.RowDefinitions>
+        <Grid x:Name="MainChrome" Grid.Column="1">
+            <Grid.RowDefinitions><RowDefinition Height="72"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition x:Name="LogRow" Height="150"/></Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Background="#0D1626" BorderBrush="#26354B" BorderThickness="0,0,0,1" Padding="20,12">
+            <Border Grid.Row="0" Background="#111620" BorderBrush="#273143" BorderThickness="0,0,0,1" Padding="20,12">
                 <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
@@ -221,13 +239,66 @@
                         <TextBlock x:Name="PageSubtitleText" Text="Visão geral e ações recomendadas" Foreground="{StaticResource MutedTextBrush}" FontSize="12"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnToggleInterface" Content="Interface avançada" Margin="8,0,8,0" Padding="14,8"/>
+                        <Button x:Name="BtnShowOnboarding" Content="Primeiros passos" Margin="0,0,0,0" Background="Transparent" BorderThickness="0"/>
+                        <StackPanel x:Name="AdvancedModeControls" Orientation="Horizontal" Visibility="Collapsed">
                         <CheckBox x:Name="SimulationCheckBox" Content="Simulação" IsChecked="True" ToolTip="Planeja e registra sem alterar o Windows."/>
                         <CheckBox x:Name="ReadOnlyCheckBox" Content="Somente leitura" ToolTip="Bloqueia todas as alterações e restaurações."/>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Border>
 
             <Grid x:Name="ContentHost" Grid.Row="1" Margin="20,16,8,8">
+                <ScrollViewer x:Name="PageSimple" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel MaxWidth="1030" HorizontalAlignment="Stretch" Margin="8,6,12,8">
+                        <Border CornerRadius="20" Padding="30,28" Margin="0,0,0,20" BorderBrush="#334331" BorderThickness="1">
+                            <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#1F2C24" Offset="0"/><GradientStop Color="#141B27" Offset="1"/></LinearGradientBrush></Border.Background>
+                            <StackPanel>
+                                <TextBlock Text="MENOS AJUSTES. MAIS CLAREZA." Foreground="{StaticResource PrimaryBrush}" FontSize="11" FontWeight="Bold" Margin="0,0,0,12"/>
+                                <TextBlock Text="Seu Windows pronto.&#xA;Sem complicar." FontSize="40" FontWeight="SemiBold" LineHeight="46" TextWrapping="Wrap"/>
+                                <TextBlock Text="Escolha um dos três presets. Você vê o que muda e pode desfazer depois." FontSize="15" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" MaxWidth="640" HorizontalAlignment="Left" Margin="0,14,0,22"/>
+                                <UniformGrid Columns="3" Margin="0,0,-10,4">
+                                    <RadioButton x:Name="SimpleSafePreset" GroupName="SimplePreset" Content="Seguro" Tag="Padrão recomendado" IsChecked="True" Style="{StaticResource PresetChoice}"/>
+                                    <RadioButton x:Name="SimpleBalancedPreset" GroupName="SimplePreset" Content="Equilibrado" Tag="Inclui paginação automática" Style="{StaticResource PresetChoice}"/>
+                                    <RadioButton x:Name="SimpleMaximumPreset" GroupName="SimplePreset" Content="Máximo FPS" Tag="Sessão temporária por jogo" Style="{StaticResource PresetChoice}"/>
+                                </UniformGrid>
+                                <Grid x:Name="SimpleGamePanel" Visibility="Collapsed" Margin="0,8,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SimpleGamePathText" IsReadOnly="True" automation:AutomationProperties.Name="Jogo escolhido para o preset Máximo FPS"/>
+                                    <Button x:Name="BtnSimpleSelectGame" Grid.Column="1" Content="Escolher jogo (.exe)"/>
+                                </Grid>
+                                <WrapPanel>
+                                    <Button x:Name="BtnSimpleApply" Content="Aplicar otimização padrão" Style="{StaticResource PrimaryButton}" MinHeight="50" FontSize="14" Padding="22,12"/>
+                                    <Button x:Name="BtnSimplePreview" Content="Testar sem alterar" MinHeight="50" FontSize="14"/>
+                                    <Button x:Name="BtnSimpleStopSession" Content="Encerrar e restaurar sessão" MinHeight="50" Visibility="Collapsed"/>
+                                </WrapPanel>
+                                <TextBlock Text="A aplicação pede sua confirmação e cria um backup das alterações compatíveis." Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <UniformGrid Columns="3" Margin="0,0,-12,6">
+                            <Border Style="{StaticResource CardStyle}" Padding="18,16"><StackPanel><TextBlock Text="PROCESSADOR" FontSize="10" Foreground="{StaticResource MutedTextBrush}" FontWeight="SemiBold"/><TextBlock x:Name="SimpleCpuText" Text="—" FontSize="25" Margin="0,8,0,0"/></StackPanel></Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="18,16"><StackPanel><TextBlock Text="MEMÓRIA EM USO" FontSize="10" Foreground="{StaticResource MutedTextBrush}" FontWeight="SemiBold"/><TextBlock x:Name="SimpleRamText" Text="—" FontSize="25" Margin="0,8,0,0"/></StackPanel></Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="18,16"><StackPanel><TextBlock Text="ATIVIDADE DO DISCO" FontSize="10" Foreground="{StaticResource MutedTextBrush}" FontWeight="SemiBold"/><TextBlock x:Name="SimpleDiskText" Text="—" FontSize="25" Margin="0,8,0,0"/></StackPanel></Border>
+                        </UniformGrid>
+                        <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18" Padding="24,22">
+                            <StackPanel>
+                                <TextBlock x:Name="SimplePresetTitleText" Text="O que o preset Seguro faz?" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock x:Name="SimplePresetDescriptionText" Text="• Solicita o Modo de Jogo e revisa capturas, quando o Windows permite.&#xA;• Reduz animações e transparência com o perfil visual equilibrado.&#xA;• Preserva seu plano de energia, programas, serviços e arquivos pessoais." FontSize="14" LineHeight="26" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+                                <Border Background="#1D2431" CornerRadius="10" Padding="14,12" Margin="0,18,0,0">
+                                    <TextBlock x:Name="SimpleResultText" Text="Você está no controle. Teste primeiro ou aplique o padrão quando estiver pronto." TextWrapping="Wrap" FontSize="13" automation:AutomationProperties.LiveSetting="Polite"/>
+                                </Border>
+                                <WrapPanel Margin="0,16,0,0">
+                                    <Button x:Name="BtnSimpleUndo" Content="Desfazer última otimização" IsEnabled="False"/>
+                                    <Button x:Name="BtnSimpleGameMode" Content="Abrir Modo de Jogo"/>
+                                    <Button x:Name="BtnSimpleCaptures" Content="Revisar capturas"/>
+                                </WrapPanel>
+                                <TextBlock Text="Algumas opções precisam ser confirmadas nas Configurações do Windows. O efeito no FPS varia por jogo e computador." Style="{StaticResource MutedText}" FontSize="12"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Precisa de opções individuais? Use Interface avançada no topo. A ajuda inicial continua disponível em Primeiros passos." Style="{StaticResource MutedText}" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12" Margin="12,0,12,8"/>
+                    </StackPanel>
+                </ScrollViewer>
+
                 <ScrollViewer x:Name="PageHome" VerticalScrollBarVisibility="Auto">
                     <StackPanel>
                         <Grid>
@@ -387,7 +458,7 @@
                             <StackPanel>
                                 <TextBlock Text="Energia e equipamento" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="PowerHardwareText" Text="Detectando desktop/notebook e processador..." Style="{StaticResource MutedText}" Margin="0,0,0,12"/>
-                                <Border Background="#362713" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,0,0,12">
+                                <Border Background="#362713" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="10" Padding="10" Margin="0,0,0,12">
                                     <TextBlock Text="Aviso moderado: planos agressivos aumentam consumo, temperatura, ruído e podem reduzir a autonomia." TextWrapping="Wrap"/>
                                 </Border>
                                 <WrapPanel>
@@ -554,7 +625,7 @@
                             </StackPanel></Border>
                             <Border Grid.Column="1" Style="{StaticResource CardStyle}"><StackPanel>
                                 <TextBlock Text="Prévia do diff" Style="{StaticResource SectionTitle}"/>
-                                <ListBox x:Name="VisualPreviewList" Height="190" Background="#0D1626" Foreground="{StaticResource TextBrush}" BorderBrush="{StaticResource BorderBrush}"/>
+                                <ListBox x:Name="VisualPreviewList" Height="190" Background="#111620" Foreground="{StaticResource TextBrush}" BorderBrush="{StaticResource BorderBrush}"/>
                                 <ComboBox x:Name="VisualPreviewProfileCombo" Margin="0,10,0,8"><ComboBoxItem Content="Balanced" IsSelected="True"/><ComboBoxItem Content="MaximumPerformance"/></ComboBox>
                                 <Button x:Name="BtnPreviewVisual" Content="Atualizar prévia"/>
                             </StackPanel></Border>
@@ -606,7 +677,7 @@
                             <CheckBox x:Name="PrivacyConsumerFeaturesCheck" Content="Desativar sugestões e recursos promocionais (edições compatíveis)"/>
                             <CheckBox x:Name="PrivacyStartRecommendationsCheck" Content="Desativar recomendações do menu Iniciar (Windows 11)"/>
                             <WrapPanel><Button x:Name="BtnApplyPrivacy" Content="Aplicar selecionados" Style="{StaticResource PrimaryButton}"/><Button x:Name="BtnOpenPrivacy" Content="Abrir Privacidade do Windows"/></WrapPanel>
-                            <Border Background="#173023" BorderBrush="{StaticResource SuccessBrush}" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,10,0,0"><TextBlock Text="Defender, Windows Update, segurança, login Microsoft e Microsoft Store nunca são desativados." TextWrapping="Wrap"/></Border>
+                            <Border Background="#173023" BorderBrush="{StaticResource SuccessBrush}" BorderThickness="1" CornerRadius="10" Padding="10" Margin="0,10,0,0"><TextBlock Text="Defender, Windows Update, segurança, login Microsoft e Microsoft Store nunca são desativados." TextWrapping="Wrap"/></Border>
                         </StackPanel></Border>
                     </StackPanel>
                 </ScrollViewer>
@@ -693,24 +764,51 @@
                 </ScrollViewer>
             </Grid>
 
-            <Border Grid.Row="2" Background="#0D1626" BorderBrush="#26354B" BorderThickness="0,1,0,1" Padding="14,8">
+            <Border Grid.Row="2" Background="#111620" BorderBrush="#273143" BorderThickness="0,1,0,1" Padding="14,8">
                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <TextBlock x:Name="OperationStatusText" Text="Pronto." VerticalAlignment="Center" TextTrimming="CharacterEllipsis" automation:AutomationProperties.LiveSetting="Polite"/>
-                    <ProgressBar x:Name="OperationProgressBar" Grid.Column="1" Height="10" Minimum="0" Maximum="100" Value="0" VerticalAlignment="Center" Foreground="{StaticResource PrimaryBrush}" Background="#172033" BorderThickness="0"/>
+                    <ProgressBar x:Name="OperationProgressBar" Grid.Column="1" Height="10" Minimum="0" Maximum="100" Value="0" VerticalAlignment="Center" Foreground="{StaticResource PrimaryBrush}" Background="#202736" BorderThickness="0"/>
                     <Button x:Name="BtnCancelOperation" Grid.Column="2" Content="Cancelar" MinHeight="44" Padding="12,4" Margin="12,0,0,0" IsEnabled="False"/>
                 </Grid>
             </Border>
 
-            <Border Grid.Row="3" Background="#090F1B" Padding="14,8">
+            <Border x:Name="AdvancedLogPanel" Grid.Row="3" Background="#0B0F17" Padding="14,8">
                 <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBlock Text="Log da sessão" FontWeight="SemiBold"/>
                         <Button x:Name="BtnClearLogView" Grid.Column="1" Content="Limpar visualização" MinHeight="44" Padding="10,3" Margin="0"/>
                     </Grid>
-                    <ListBox x:Name="LogListBox" Grid.Row="1" Margin="0,6,0,0" Background="#090F1B" Foreground="{StaticResource MutedTextBrush}"
+                    <ListBox x:Name="LogListBox" Grid.Row="1" Margin="0,6,0,0" Background="#0B0F17" Foreground="{StaticResource MutedTextBrush}"
                              BorderThickness="0" FontFamily="Consolas" FontSize="11" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
                 </Grid>
             </Border>
         </Grid>
+        <Grid x:Name="OnboardingOverlay" Grid.ColumnSpan="2" Panel.ZIndex="100" Background="#D907090E" Visibility="Collapsed">
+            <Border Width="600" MaxHeight="620" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20" Background="#171D29" BorderBrush="#394535" BorderThickness="1" CornerRadius="22" Padding="34,30">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="WINDOWS FPS OPTIMIZER" Foreground="{StaticResource PrimaryBrush}" FontWeight="Bold" FontSize="11" VerticalAlignment="Center"/>
+                            <Button x:Name="BtnOnboardingSkip" Grid.Column="1" Content="Pular apresentação" Background="Transparent" BorderThickness="0" FontSize="12" Padding="8,4" Margin="0"/>
+                        </Grid>
+                        <TextBlock x:Name="OnboardingStepText" Text="1 DE 3  ·  BOAS-VINDAS" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,26,0,12"/>
+                        <TextBlock x:Name="OnboardingTitleText" Text="Prepare seu Windows.&#xA;No seu ritmo." FontSize="32" FontWeight="SemiBold" TextWrapping="Wrap" LineHeight="39"/>
+                        <TextBlock x:Name="OnboardingBodyText" Text="Um caminho simples para revisar os ajustes antes de jogar. Você escolhe quando testar, aplicar ou desfazer." Foreground="{StaticResource MutedTextBrush}" FontSize="15" LineHeight="24" TextWrapping="Wrap" Margin="0,18,0,20"/>
+                        <Border Background="#202B25" BorderBrush="#354C2E" BorderThickness="1" Padding="18" CornerRadius="12">
+                            <TextBlock x:Name="OnboardingNoteText" Text="Nada será otimizado durante esta apresentação." Foreground="#D9E6D2" TextWrapping="Wrap" FontSize="13" LineHeight="22"/>
+                        </Border>
+                        <StackPanel x:Name="OnboardingChoicePanel" Visibility="Collapsed" Margin="0,18,0,0">
+                            <RadioButton x:Name="OnboardingSimpleRadio" GroupName="InterfaceChoice" Content="Simplificada — três presets e controles essenciais" IsChecked="True" Foreground="White" FontSize="13" Padding="4" Margin="0,0,0,14"/>
+                            <RadioButton x:Name="OnboardingAdvancedRadio" GroupName="InterfaceChoice" Content="Avançada — todas as opções e os detalhes" Foreground="White" FontSize="13" Padding="4"/>
+                        </StackPanel>
+                        <Grid Margin="0,28,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Button x:Name="BtnOnboardingBack" Content="Voltar" HorizontalAlignment="Left" Visibility="Hidden" Margin="0"/>
+                            <Button x:Name="BtnOnboardingNext" Grid.Column="1" Content="Como funciona" Style="{StaticResource PrimaryButton}" Margin="0" MinWidth="160"/>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
     </Grid>
 </Window>

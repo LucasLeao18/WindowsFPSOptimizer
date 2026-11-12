@@ -814,8 +814,9 @@ function Set-BackupFolderHighIntegrity {
     try {
         $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
         if (-not (Test-Path -LiteralPath $icacls -PathType Leaf)) { throw 'icacls.exe nao foi encontrado.' }
-        $output = @(& $icacls $Path '/setintegritylevel' '(OI)(CI)H' 2>&1 | ForEach-Object { [string]$_ })
-        if ($LASTEXITCODE -ne 0) { throw "icacls.exe retornou $LASTEXITCODE. $($output -join ' ')" }
+        $native = Invoke-OptimizerHiddenNativeProcess -FilePath $icacls -ArgumentList @($Path, '/setintegritylevel', '(OI)(CI)H')
+        $output = @($native.Output)
+        if ($native.ExitCode -ne 0) { throw "icacls.exe retornou $($native.ExitCode). $($output -join ' ')" }
         $rid = Get-PathMandatoryIntegrityRid -Path $Path
         if ($rid -lt 0x3000) { throw 'Nao foi possivel confirmar o rotulo de integridade alta.' }
         $result['Succeeded'] = $true
@@ -1073,9 +1074,9 @@ function Add-EmergencyRegistryExport {
         $nativePath = Convert-RegistryProviderPathToNative -Path $RegistryPath
         $regExe = Join-Path $env:SystemRoot 'System32\reg.exe'
         if (-not (Test-Path -LiteralPath $regExe -PathType Leaf)) { $regExe = 'reg.exe' }
-        $output = @(& $regExe export $nativePath $filePath /y 2>&1 | ForEach-Object { [string]$_ })
-        $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) { $exitCode = 0 }
+        $native = Invoke-OptimizerHiddenNativeProcess -FilePath $regExe -ArgumentList @('export', $nativePath, $filePath, '/y')
+        $output = @($native.Output)
+        $exitCode = $native.ExitCode
         if ([int]$exitCode -ne 0 -or -not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
             throw "reg.exe retornou $exitCode. $($output -join ' ')"
         }
@@ -1717,9 +1718,9 @@ function Invoke-BackupPowerCfg {
         return Invoke-SafeNativeCommand -FilePath $exe -ArgumentList $Arguments -Description 'Restauracao de energia' `
             -RequiresAdministrator:$Mutating -Mutating:$Mutating
     }
-    $output = @(& $exe @Arguments 2>&1 | ForEach-Object { [string]$_ })
-    $exitCode = $LASTEXITCODE
-    if ($null -eq $exitCode) { $exitCode = 0 }
+    $native = Invoke-OptimizerHiddenNativeProcess -FilePath $exe -ArgumentList $Arguments
+    $output = @($native.Output)
+    $exitCode = $native.ExitCode
     if ([int]$exitCode -ne 0) { throw "powercfg.exe retornou $exitCode. $($output -join ' ')" }
     return [pscustomobject]@{ ExitCode = [int]$exitCode; Output = $output; Simulated = $false }
 }

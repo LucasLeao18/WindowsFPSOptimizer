@@ -1,7 +1,7 @@
 {
   "App": {
     "Name": "Windows FPS Optimizer",
-    "Version": "1.1.0",
+    "Version": "1.2.0",
     "SchemaVersion": 1,
     "Language": "pt-BR",
     "DefaultSimulation": true,

@@ -488,6 +488,47 @@ function Test-SafeNativeCommand {
     return -not ($joined -match $script:BlockedNativePattern)
 }
 
+function ConvertTo-WindowsNativeArgument {
+    param([AllowEmptyString()][string]$Value)
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
+function Invoke-OptimizerHiddenNativeProcess {
+    [CmdletBinding()]
+    param([string]$FilePath, [string[]]$ArgumentList = @())
+    $leaf = [IO.Path]::GetFileName($FilePath)
+    if ($leaf -notin @('powercfg.exe','reg.exe','icacls.exe','sfc.exe','dism.exe','chkdsk.exe','defrag.exe','cleanmgr.exe')) {
+        throw 'Ferramenta nativa nao permitida.'
+    }
+    $trusted = Join-Path ([Environment]::SystemDirectory) $leaf
+    if ([IO.Path]::IsPathRooted($FilePath) -and -not [IO.Path]::GetFullPath($FilePath).Equals($trusted, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'A ferramenta deve pertencer ao diretorio nativo do Windows.'
+    }
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $trusted
+    $start.Arguments = (@($ArgumentList | ForEach-Object { ConvertTo-WindowsNativeArgument $_ }) -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $encoding = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $start.StandardOutputEncoding = $encoding
+    $start.StandardErrorEncoding = $encoding
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw 'Nao foi possivel iniciar a ferramenta do Windows.' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $output = @([regex]::Split(($stdout.Result + "`n" + $stderr.Result), '\r\n|\n|\r') | Where-Object { $_.Length -gt 0 })
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output; Simulated = $false }
+    }
+    finally { $process.Dispose() }
+}
+
 function Invoke-SafeNativeCommand {
     [CmdletBinding()]
     param(
@@ -514,9 +555,9 @@ function Invoke-SafeNativeCommand {
     }
 
     try {
-        $output = @(& $FilePath @ArgumentList 2>&1 | ForEach-Object { [string]$_ })
-        $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) { $exitCode = 0 }
+        $native = Invoke-OptimizerHiddenNativeProcess -FilePath $FilePath -ArgumentList $ArgumentList
+        $output = @($native.Output)
+        $exitCode = $native.ExitCode
         if ($SuccessExitCodes -notcontains [int]$exitCode) {
             throw "Codigo de saida $exitCode. $($output -join [Environment]::NewLine)"
         }
@@ -632,13 +673,11 @@ function Start-OptimizerElevated {
         )
     }
 
-    $powerShellPath = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)) {
-        throw 'Windows PowerShell 5.1 nao foi encontrado no caminho nativo do Windows.'
+    $appLauncher = Join-Path (Split-Path -Parent $ScriptPath) 'WindowsFPSOptimizer.exe'
+    if (-not (Test-Path -LiteralPath $appLauncher -PathType Leaf)) {
+        throw 'Aplicativo grafico ausente. Reinstale usando o Setup.exe.'
     }
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $ScriptPath))
-    $arguments += $AdditionalArguments
-    Start-Process -FilePath $powerShellPath -Verb RunAs -ArgumentList ($arguments -join ' ') -ErrorAction Stop | Out-Null
+    Start-Process -FilePath $appLauncher -Verb RunAs -ArgumentList ($AdditionalArguments -join ' ') -ErrorAction Stop | Out-Null
     return $true
 }
 
@@ -650,3 +689,4 @@ Export-ModuleMember -Function Initialize-OptimizerContext, Get-OptimizerContext,
     Save-OptimizerJsonFile, Invoke-OptimizerOperation, Start-OptimizerElevated,
     Set-OptimizerCurrentProfile, Request-OptimizerCancellation, Reset-OptimizerCancellation,
     Test-OptimizerCancellation
+Export-ModuleMember -Function Invoke-OptimizerHiddenNativeProcess

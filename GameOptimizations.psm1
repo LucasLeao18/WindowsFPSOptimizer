@@ -1341,15 +1341,15 @@ function New-GameProfileShortcut {
         return [pscustomobject]@{ Result = 'Simulated'; Path = $destination; ProfileId = $ProfileId }
     }
 
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) { throw 'Windows PowerShell 5.1 nao foi encontrado.' }
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -STA -File "{0}" -NoSimulation -LaunchGameProfile "{1}"' -f $mainScript, $ProfileId
+    $appLauncher = Join-Path (Get-OptimizerContext).AppRoot 'WindowsFPSOptimizer.exe'
+    if (-not (Test-Path -LiteralPath $appLauncher -PathType Leaf)) { throw 'Aplicativo grafico ausente. Reinstale usando o Setup.exe.' }
+    $arguments = '-NoSimulation -LaunchGameProfile "{0}"' -f $ProfileId
     $shell = $null
     $shortcut = $null
     try {
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($destination)
-        $shortcut.TargetPath = $powershell
+        $shortcut.TargetPath = $appLauncher
         $shortcut.Arguments = $arguments
         $shortcut.WorkingDirectory = (Get-OptimizerContext).AppRoot
         $shortcut.Description = "Iniciar $($profile.Name) com perfil do Windows FPS Optimizer"

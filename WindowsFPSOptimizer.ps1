@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 
 [CmdletBinding()]
 param(
@@ -6,6 +6,7 @@ param(
     [switch]$NoSimulation,
     [switch]$ReadOnly,
     [switch]$Relaunched,
+    [switch]$Advanced,
     [string]$LaunchGameProfile = '',
     [string]$ResumeAction = '',
     [string]$ResumeDataBase64 = ''
@@ -98,7 +99,8 @@ if ((Test-BootstrapAdministrator) -and -not (Test-BootstrapProtectedPath)) {
 }
 
 function Get-RelaunchArguments {
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $script:MainScriptPath), '-Relaunched')
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-STA', '-File', ('"{0}"' -f $script:MainScriptPath), '-Relaunched')
+    if ($Advanced) { $arguments += '-Advanced' }
     if ($Simulation) { $arguments += '-Simulation' }
     if ($NoSimulation) { $arguments += '-NoSimulation' }
     if ($ReadOnly) { $arguments += '-ReadOnly' }
@@ -113,13 +115,13 @@ if (-not $Relaunched -and [Environment]::Is64BitOperatingSystem -and -not [Envir
     $trustedWindowsRoot = Split-Path -Parent ([Environment]::SystemDirectory)
     $sysnative = Join-Path $trustedWindowsRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
     if (Test-Path -LiteralPath $sysnative) {
-        Start-Process -FilePath $sysnative -ArgumentList ((Get-RelaunchArguments) -join ' ') -ErrorAction Stop | Out-Null
+        Start-Process -FilePath $sysnative -WindowStyle Hidden -ArgumentList ((Get-RelaunchArguments) -join ' ') -ErrorAction Stop | Out-Null
         exit
     }
 }
 if (-not $Relaunched -and [Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     $powershellExe = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    Start-Process -FilePath $powershellExe -ArgumentList ((Get-RelaunchArguments) -join ' ') -ErrorAction Stop | Out-Null
+    Start-Process -FilePath $powershellExe -WindowStyle Hidden -ArgumentList ((Get-RelaunchArguments) -join ' ') -ErrorAction Stop | Out-Null
     exit
 }
 
@@ -239,12 +241,13 @@ $navigation = [ordered]@{
 function Show-AppPage {
     param([Parameter(Mandatory = $true)][string]$NavigationName)
     $target = $navigation[$NavigationName]
+    (Get-Control 'PageSimple').Visibility = 'Collapsed'
     foreach ($definition in $navigation.GetEnumerator()) {
         (Get-Control $definition.Value.Page).Visibility = if ($definition.Key -eq $NavigationName) { 'Visible' } else { 'Collapsed' }
         $button = Get-Control $definition.Key
         if ($definition.Key -eq $NavigationName) {
-            $button.Background = [Windows.Media.BrushConverter]::new().ConvertFromString('#1D3355')
-            $button.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#3B82F6')
+            $button.Background = [Windows.Media.BrushConverter]::new().ConvertFromString('#263324')
+            $button.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#A3E635')
             $button.FontWeight = 'SemiBold'
             try { [Windows.Automation.AutomationProperties]::SetHelpText($button, 'Pagina atual') } catch { }
         }
@@ -264,6 +267,125 @@ foreach ($name in $navigation.Keys) {
     $capturedName = $name
     (Get-Control $name).Add_Click({ Show-AppPage -NavigationName $capturedName }.GetNewClosure())
 }
+
+$script:UiPreferences = Get-OptimizerUiPreferences
+$script:UiInterface = 'Simple'
+$script:AdvancedDataLoaded = $false
+$script:OnboardingStep = 0
+$script:SimplePreset = 'Safe'
+
+function Set-SimplePreset {
+    param([ValidateSet('Safe', 'Balanced', 'MaximumFPS')][string]$Name)
+    $script:SimplePreset = $Name
+    (Get-Control 'SimpleGamePanel').Visibility = if ($Name -eq 'MaximumFPS') { 'Visible' } else { 'Collapsed' }
+    $title = switch ($Name) { 'Safe' { 'Seguro' } 'Balanced' { 'Equilibrado' } default { 'Máximo FPS' } }
+    (Get-Control 'SimplePresetTitleText').Text = "O que o preset $title faz?"
+    (Get-Control 'BtnSimpleApply').Content = switch ($Name) { 'Safe' { 'Aplicar otimização padrão' } 'Balanced' { 'Aplicar preset Equilibrado' } default { 'Iniciar jogo com Máximo FPS' } }
+    (Get-Control 'SimplePresetDescriptionText').Text = switch ($Name) {
+        'Safe' { "• Solicita Modo de Jogo e revisa capturas compatíveis.`n• Aplica efeitos visuais equilibrados.`n• Preserva energia, programas, serviços e arquivos pessoais." }
+        'Balanced' { "• Inclui os ajustes do preset Seguro.`n• Devolve o dimensionamento da paginação ao Windows; pode exigir reiniciar.`n• Nesta interface, não fecha programas nem desativa serviços ou tarefas." }
+        default { "• Inicia o jogo escolhido com prioridade AboveNormal e Alto Desempenho temporários.`n• Reduz efeitos visuais durante a sessão e restaura ao terminar.`n• Não altera Game Mode, capturas ou inicialização permanentemente. O ganho de FPS não é garantido." }
+    }
+}
+
+function Get-SimplePresetParameters {
+    param([bool]$Confirmed)
+    $executable = [string](Get-Control 'SimpleGamePathText').Text
+    if ($script:SimplePreset -eq 'MaximumFPS' -and -not (Test-SafeExecutablePath -Path $executable)) {
+        throw 'Escolha o arquivo .exe do jogo antes de testar ou iniciar o Máximo FPS.'
+    }
+    return @{ Preset = $script:SimplePreset; Confirmed = $Confirmed; GameExecutable = $executable }
+}
+
+(Get-Control 'SimpleSafePreset').Add_Checked({ Set-SimplePreset Safe })
+(Get-Control 'SimpleBalancedPreset').Add_Checked({ Set-SimplePreset Balanced })
+(Get-Control 'SimpleMaximumPreset').Add_Checked({ Set-SimplePreset MaximumFPS })
+(Get-Control 'BtnSimpleSelectGame').Add_Click({
+    $dialog = New-Object Microsoft.Win32.OpenFileDialog
+    $dialog.Title = 'Escolha o executável do jogo'
+    $dialog.Filter = 'Jogo ou programa (*.exe)|*.exe'
+    if ($dialog.ShowDialog($window)) { (Get-Control 'SimpleGamePathText').Text = $dialog.FileName }
+})
+(Get-Control 'BtnSimpleStopSession').Add_Click({ Start-UiAction -ActionId StopGameSession -Status 'Encerrando e restaurando a sessão...' })
+
+function Save-UiPreference {
+    try {
+        Set-OptimizerUiPreferences -Interface $script:UiInterface -OnboardingCompleted $script:UiPreferences.OnboardingCompleted
+    }
+    catch { (Get-Control 'OperationStatusText').Text = 'Sua preferência não pôde ser salva. Você pode continuar usando o aplicativo.' }
+}
+
+function Set-InterfaceMode {
+    param([ValidateSet('Simple', 'Advanced')][string]$Mode, [switch]$LoadData, [switch]$Persist)
+    $script:UiInterface = $Mode
+    $simple = $Mode -eq 'Simple'
+    (Get-Control 'SidebarColumn').Width = if ($simple) { [Windows.GridLength]::new(0) } else { [Windows.GridLength]::new(244) }
+    (Get-Control 'SidebarChrome').Visibility = if ($simple) { 'Collapsed' } else { 'Visible' }
+    (Get-Control 'AdvancedModeControls').Visibility = if ($simple) { 'Collapsed' } else { 'Visible' }
+    (Get-Control 'LogRow').Height = if ($simple) { [Windows.GridLength]::new(0) } else { [Windows.GridLength]::new(130) }
+    (Get-Control 'AdvancedLogPanel').Visibility = if ($simple) { 'Collapsed' } else { 'Visible' }
+    (Get-Control 'BtnToggleInterface').Content = if ($simple) { 'Interface avançada' } else { 'Interface simplificada' }
+    if ($simple) {
+        foreach ($entry in $navigation.Values) { (Get-Control $entry.Page).Visibility = 'Collapsed' }
+        (Get-Control 'PageSimple').Visibility = 'Visible'
+        (Get-Control 'PageTitleText').Text = 'Windows FPS Optimizer'
+        (Get-Control 'PageSubtitleText').Text = 'Interface simplificada · o essencial para começar'
+    }
+    else {
+        Show-AppPage -NavigationName NavHome
+        if ($LoadData -and -not $script:AdvancedDataLoaded) { $script:PendingRefresh = $true }
+    }
+    if ($Persist) { Save-UiPreference }
+}
+
+function Show-OnboardingStep {
+    $steps = @(
+        @{ Title = "Prepare seu Windows.`nNo seu ritmo."; Body = 'Um caminho simples para revisar os ajustes antes de jogar. Você escolhe quando testar, aplicar ou desfazer.'; Note = 'Nada será otimizado durante esta apresentação.'; Button = 'Como funciona' },
+        @{ Title = "Três ações.`nVocê no controle."; Body = 'Teste sem alterar para conhecer o padrão. Aplique quando estiver pronto. Se quiser voltar, use Desfazer última otimização.'; Note = 'Ao aplicar, você confirma as mudanças e o aplicativo cria um backup. Algumas opções são concluídas nas Configurações do Windows.'; Button = 'Escolher minha interface' },
+        @{ Title = 'Comece do seu jeito.'; Body = 'A interface simplificada reúne o padrão recomendado. A avançada oferece ajustes individuais e todos os detalhes. Você pode trocar a qualquer momento.'; Note = 'Esta ajuda estará sempre disponível em Primeiros passos, no topo da janela.'; Button = 'Começar' }
+    )
+    $step = $steps[$script:OnboardingStep]
+    (Get-Control 'OnboardingStepText').Text = "$($script:OnboardingStep + 1) DE 3  ·  PRIMEIROS PASSOS"
+    (Get-Control 'OnboardingTitleText').Text = $step.Title
+    (Get-Control 'OnboardingBodyText').Text = $step.Body
+    (Get-Control 'OnboardingNoteText').Text = $step.Note
+    (Get-Control 'BtnOnboardingNext').Content = $step.Button
+    (Get-Control 'BtnOnboardingBack').Visibility = if ($script:OnboardingStep -eq 0) { 'Hidden' } else { 'Visible' }
+    (Get-Control 'OnboardingChoicePanel').Visibility = if ($script:OnboardingStep -eq 2) { 'Visible' } else { 'Collapsed' }
+}
+
+function Open-Onboarding {
+    $script:OnboardingStep = 0
+    (Get-Control 'OnboardingSimpleRadio').IsChecked = ($script:UiInterface -eq 'Simple')
+    (Get-Control 'OnboardingAdvancedRadio').IsChecked = ($script:UiInterface -eq 'Advanced')
+    Show-OnboardingStep
+    (Get-Control 'MainChrome').IsEnabled = $false
+    (Get-Control 'SidebarChrome').IsEnabled = $false
+    (Get-Control 'OnboardingOverlay').Visibility = 'Visible'
+    [void](Get-Control 'BtnOnboardingNext').Focus()
+}
+
+function Complete-Onboarding {
+    param([switch]$Skipped)
+    $mode = if (-not $Skipped -and (Get-Control 'OnboardingAdvancedRadio').IsChecked) { 'Advanced' } else { $script:UiInterface }
+    if (-not $Skipped -and (Get-Control 'OnboardingSimpleRadio').IsChecked) { $mode = 'Simple' }
+    $script:UiPreferences.OnboardingCompleted = $true
+    (Get-Control 'OnboardingOverlay').Visibility = 'Collapsed'
+    (Get-Control 'MainChrome').IsEnabled = $true
+    (Get-Control 'SidebarChrome').IsEnabled = $true
+    Set-InterfaceMode -Mode $mode -LoadData -Persist
+    [void](Get-Control 'BtnToggleInterface').Focus()
+}
+
+(Get-Control 'BtnToggleInterface').Add_Click({
+    Set-InterfaceMode -Mode $(if ($script:UiInterface -eq 'Simple') { 'Advanced' } else { 'Simple' }) -LoadData -Persist
+})
+(Get-Control 'BtnShowOnboarding').Add_Click({ Open-Onboarding })
+(Get-Control 'BtnOnboardingNext').Add_Click({
+    if ($script:OnboardingStep -lt 2) { $script:OnboardingStep++; Show-OnboardingStep } else { Complete-Onboarding }
+})
+(Get-Control 'BtnOnboardingBack').Add_Click({ if ($script:OnboardingStep -gt 0) { $script:OnboardingStep--; Show-OnboardingStep } })
+(Get-Control 'BtnOnboardingSkip').Add_Click({ Complete-Onboarding -Skipped })
 
 # O pool mantem a thread WPF livre. Apenas uma operacao de UI e despachada por vez;
 # cada operacao importa os mesmos modulos em um runspace isolado.
@@ -304,6 +426,10 @@ function Set-UiBusyState {
     # Durante o monitoramento do jogo a interface continua operavel. Novas mutacoes
     # sao recusadas pelo dispatcher, mas o usuario ainda pode pedir encerramento.
     (Get-Control 'ContentHost').IsEnabled = (-not $Busy) -or $gameMonitorActive
+    (Get-Control 'BtnSimpleStopSession').Visibility = if ($gameMonitorActive) { 'Visible' } else { 'Collapsed' }
+    foreach ($name in @('BtnSimpleApply','BtnSimplePreview','SimpleSafePreset','SimpleBalancedPreset','SimpleMaximumPreset','BtnSimpleSelectGame')) {
+        (Get-Control $name).IsEnabled = -not $Busy
+    }
     (Get-Control 'OperationStatusText').Text = $Message
     $progress = Get-Control 'OperationProgressBar'
     $progress.IsIndeterminate = $Busy
@@ -367,8 +493,9 @@ function Write-UiBackgroundFailure {
 function Request-AdministrativeRelaunch {
     param([string]$PendingActionId = '', [hashtable]$PendingParameters = @{})
     if ($context.IsAdministrator) { return $true }
-    if (-not (Confirm-AppAction -Message "Esta operacao requer privilegios de administrador. Deseja reiniciar o aplicativo com UAC?`n`nNenhuma alteracao foi aplicada." -Title 'Elevacao necessaria')) { return $false }
+    if ($PendingActionId -ne 'SimpleOptimize' -and -not (Confirm-AppAction -Message "Esta operacao requer privilegios de administrador. Deseja reiniciar o aplicativo com UAC?`n`nNenhuma alteracao foi aplicada." -Title 'Elevacao necessaria')) { return $false }
     $arguments = @()
+    if ($script:UiInterface -eq 'Advanced') { $arguments += '-Advanced' }
     if ([bool](Get-Control 'SimulationCheckBox').IsChecked) { $arguments += '-Simulation' } else { $arguments += '-NoSimulation' }
     if ([bool](Get-Control 'ReadOnlyCheckBox').IsChecked) { $arguments += '-ReadOnly' }
     if (-not [string]::IsNullOrWhiteSpace($LaunchGameProfile)) {
@@ -559,7 +686,22 @@ function Format-PageFileStatus {
 function Update-UiFromResult {
     param([string]$ActionId, $Result)
     switch ($ActionId) {
+        'SimpleInitialData' {
+            Update-SimpleMetrics $Result.Metrics
+            (Get-Control 'BtnSimpleUndo').IsEnabled = @($Result.Backups | Where-Object { $_.IsValid -and $_.EntryCount -gt 0 }).Count -gt 0
+        }
+        'SimpleOptimize' {
+            (Get-Control 'SimpleResultText').Text = if ($Result.Result -eq 'Simulated') {
+                'Teste concluído. Nenhum ajuste foi aplicado. Use Aplicar otimização padrão quando estiver pronto.'
+            } elseif ($Result.Preset -eq 'MaximumFPS') {
+                'Sessão encerrada e recursos restaurados. Você pode iniciar outro jogo ou escolher um preset diferente.'
+            } else {
+                'Etapa concluída. Os ajustes compatíveis foram aplicados com backup. Se necessário, conclua Modo de Jogo e Capturas pelos botões abaixo.'
+            }
+        }
         'InitialData' {
+            $script:AdvancedDataLoaded = $true
+            Update-SimpleMetrics $Result.Overview.Metrics
             Update-HomeOverview $Result.Overview
             if ($Result.Memory) {
                 (Get-Control 'MemoryTotalText').Text = "$($Result.Memory.TotalGB) GB"
@@ -636,6 +778,7 @@ function Update-UiFromResult {
         'CreateBackup' { Show-ManualBackupResult $Result }
         'CreateRestorePoint' { Show-ManualBackupResult $Result }
         'Metrics' {
+            Update-SimpleMetrics $Result
             (Get-Control 'HomeProcessText').Text = [string]$Result.ProcessCount
             (Get-Control 'HomeUsageText').Text = "CPU $($Result.CpuPercent)% | RAM $($Result.RamPercent)% | Disco $($Result.DiskPercent)%"
         }
@@ -681,6 +824,14 @@ function Update-UiFromResult {
             [void]$preview.Items.Add("Preservado: $(@($Result.Preserved) -join ', ')")
         }
     }
+}
+
+function Update-SimpleMetrics {
+    param($Metrics)
+    if (-not $Metrics) { return }
+    (Get-Control 'SimpleCpuText').Text = if ($null -ne $Metrics.CpuPercent) { "$($Metrics.CpuPercent)%" } else { 'Indisponível' }
+    (Get-Control 'SimpleRamText').Text = if ($null -ne $Metrics.RamPercent) { "$($Metrics.RamPercent)%" } else { 'Indisponível' }
+    (Get-Control 'SimpleDiskText').Text = if ($null -ne $Metrics.DiskPercent) { "$($Metrics.DiskPercent)%" } else { 'Indisponível' }
 }
 
 function Get-OperationCompletionMessage {
@@ -988,6 +1139,37 @@ $modeChanged = {
 
 # Inicio, backup, relatorios e restauracao.
 Add-AsyncButtonHandler 'BtnAnalyze' 'Analyze' $null 'Analisando computador...'
+(Get-Control 'BtnSimpleApply').Add_Click({
+    try {
+        if ($script:ActiveTask) { return }
+        if ((Get-Control 'ReadOnlyCheckBox').IsChecked) { throw 'O modo somente leitura está ativo. Desative-o na interface avançada para aplicar.' }
+        $parameters = Get-SimplePresetParameters -Confirmed $true
+        $description = [string](Get-Control 'SimplePresetDescriptionText').Text
+        if (-not (Confirm-AppAction -Title 'Confirmar preset' -Message "$description`n`nAs alterações reversíveis terão backup. Aplicar este preset agora?")) { return }
+        (Get-Control 'SimulationCheckBox').IsChecked = $false
+        Start-UiAction -ActionId SimpleOptimize -Parameters $parameters -Status 'Criando backup e aplicando o padrão...' -RequiresAdministrator
+    }
+    catch { Show-AppMessage -Message $_.Exception.Message -Title 'Otimização padrão' -Icon Warning }
+})
+(Get-Control 'BtnSimplePreview').Add_Click({
+    try {
+        if ($script:ActiveTask) { return }
+        $parameters = Get-SimplePresetParameters -Confirmed $false
+        (Get-Control 'SimulationCheckBox').IsChecked = $true
+        Start-UiAction -ActionId SimpleOptimize -Parameters $parameters -Status 'Testando o preset sem alterar o Windows...'
+    }
+    catch { Show-AppMessage -Message $_.Exception.Message -Title 'Testar preset' -Icon Warning }
+})
+(Get-Control 'BtnSimpleUndo').Add_Click({
+    if ($script:ActiveTask) { return }
+    if (-not (Confirm-AppAction -Title 'Desfazer otimização' -Message 'Restaurar a última otimização com backup? Alterações posteriores em conflito serão preservadas.')) { return }
+    (Get-Control 'SimulationCheckBox').IsChecked = $false
+    Start-UiAction -ActionId UndoLast -Parameters @{ Force = $false } -Status 'Restaurando a última otimização...' -RequiresAdministrator -OnCompleted {
+        (Get-Control 'SimpleResultText').Text = 'Restauração concluída. Alterações posteriores em conflito foram preservadas. Consulte os detalhes na interface avançada.'
+    }
+})
+Add-OpenSettingsHandler 'BtnSimpleGameMode' 'GameMode'
+Add-OpenSettingsHandler 'BtnSimpleCaptures' 'Captures'
 (Get-Control 'BtnCompareBenchmarks').Add_Click({
     try {
         $dialog = New-Object Microsoft.Win32.OpenFileDialog
@@ -1616,7 +1798,7 @@ Add-AsyncButtonHandler 'BtnGameFullscreenCompatibility' 'GameFullscreen' {
 })
 
 # Atualizacoes apos alteracoes comuns.
-$refreshAfterActions = @('CreateBackup', 'CreateRestorePoint', 'QuickOptimize', 'ApplyProfile', 'UndoLast', 'RestoreAll', 'RestoreManifest', 'RestoreBackupItem', 'HighPerformance',
+$refreshAfterActions = @('SimpleOptimize', 'CreateBackup', 'CreateRestorePoint', 'QuickOptimize', 'ApplyProfile', 'UndoLast', 'RestoreAll', 'RestoreManifest', 'RestoreBackupItem', 'HighPerformance',
     'UltimatePerformance', 'CreateGamingPlan', 'RestorePower', 'VisualProfile', 'VisualOptions',
     'ClearGraphicsCache', 'AutomaticPageFile', 'CustomPageFile', 'Cleanup', 'OptimizeVolume',
     'SfcVerify', 'SfcScan', 'DismCheck', 'DismScan', 'DismRestore',
@@ -1629,7 +1811,7 @@ $pollTimer.Add_Tick({
     try {
         if (-not $script:ActiveTask -and $script:PendingRefresh) {
             $script:PendingRefresh = $false
-            Start-UiAction -ActionId 'InitialData' -Status 'Atualizando a interface...'
+            Start-UiAction -ActionId $(if ($script:UiInterface -eq 'Simple') { 'SimpleInitialData' } else { 'InitialData' }) -Status 'Atualizando a interface...'
         }
     }
     catch {
@@ -1661,7 +1843,7 @@ function Update-UiFromResult {
     if ($ActionId -eq 'StopGameSession') { (Get-Control 'GameSessionStatusText').Text = 'Restauracao da sessao concluida.' }
 }
 
-Show-AppPage -NavigationName 'NavHome'
+Set-InterfaceMode -Mode $(if ($Advanced -or $LaunchGameProfile) { 'Advanced' } else { $script:UiPreferences.Interface })
 Set-UiBusyState -Busy $false -Message $(if ($context.Simulation) { 'Modo simulacao ativo por padrao.' } else { 'Pronto.' })
 Update-LogView
 $window.Add_ContentRendered({
@@ -1684,8 +1866,10 @@ $window.Add_ContentRendered({
             }.GetNewClosure()
         }
         else { $null }
-        Start-UiAction -ActionId 'InitialData' -Status 'Carregando informacoes do computador...' -OnCompleted $afterInitial
+        $initialAction = if ($script:UiInterface -eq 'Simple') { 'SimpleInitialData' } else { 'InitialData' }
+        Start-UiAction -ActionId $initialAction -Status 'Carregando informações do computador...' -OnCompleted $afterInitial
         $metricsTimer.Start()
+        if (-not $script:UiPreferences.OnboardingCompleted -and -not $ResumeAction -and -not $LaunchGameProfile) { Open-Onboarding }
     }
     catch {
         Write-UiBackgroundFailure `
