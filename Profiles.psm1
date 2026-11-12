@@ -28,6 +28,8 @@ function Get-OptimizerOperationCatalog {
         (New-OptimizerOperationDescriptor 'games.hags' 'HAGS' 'Jogos/GPU' 'Consulta capacidade conservadora e abre Configuracoes para alteracao.' Manual 'GPU/driver/build dependentes' Required Manual),
         (New-OptimizerOperationDescriptor 'games.fullscreen' 'Tela cheia por jogo' 'Jogos' 'Orienta alteracao manual por executavel; nenhuma camada interna nao documentada.' Manual 'Windows 10/11' Never Manual),
         (New-OptimizerOperationDescriptor 'games.gpu-preference' 'Preferencia de GPU' 'Jogos/GPU' 'Abre Configuracoes graficas para o executavel escolhido.' Manual 'Windows 10 1803+/11' Never Manual),
+        (New-OptimizerOperationDescriptor 'games.windowed' 'Jogos em janela' 'Jogos/GPU' 'Abre Graficos para revisar otimizacoes de jogos DX10/DX11 em janela e sem bordas.' Manual 'Windows 11 22H2+' Never Manual),
+        (New-OptimizerOperationDescriptor 'analysis.benchmark' 'Comparar capturas' 'Analise' 'Compara FPS, 1% low e frametimes medidos em CSV do PresentMon.' Information 'CSV com MsBetweenPresents' Never None),
         (New-OptimizerOperationDescriptor 'games.priority' 'Prioridade do jogo' 'Jogos/Processos' 'Aplica AboveNormal ou High enquanto o processo existe; nunca Realtime.' Moderate 'Windows 10/11' Never BestEffort),
         (New-OptimizerOperationDescriptor 'games.notifications' 'Nao Perturbe' 'Jogos' 'Abre a regra oficial de foco/nao perturbe para jogos.' Manual 'Varia entre Windows 10/11' Never Manual),
         (New-OptimizerOperationDescriptor 'games.session' 'Sessao de jogo' 'Jogos' 'Orquestra somente selecoes do usuario e restaura ao fim.' Moderate 'Windows 10/11' Possible BestEffort $true),
@@ -82,7 +84,7 @@ function Get-OptimizationProfiles {
     return @(
         [pscustomobject]@{
             Name = 'Safe'; Title = 'Perfil seguro'; Risk = 'Safe'
-            Description = 'Game Mode, capturas quando suportadas, visuais equilibrados, energia e preferencias de baixo risco.'
+            Description = 'Game Mode, capturas quando suportadas e visuais equilibrados; preserva energia e preferencias de privacidade.'
             RequiresConfirmation = $false
         },
         [pscustomobject]@{
@@ -125,6 +127,9 @@ function Invoke-OptimizationProfile {
     if ($IncludeCleanup -and -not $ConfirmedIrreversible) { throw 'A limpeza irreversivel exige confirmacao separada.' }
     $sessionBoundMaximum = ($Name -eq 'MaximumFPS')
     if ($sessionBoundMaximum) {
+        if ($IncludeCleanup) {
+            throw 'O perfil maximo FPS e temporario. Desmarque a limpeza e use a pagina de armazenamento separadamente.'
+        }
         if ([string]::IsNullOrWhiteSpace($GameExecutable)) {
             throw 'O perfil maximo FPS exige um executavel de jogo. Nenhuma alteracao foi iniciada.'
         }
@@ -134,6 +139,14 @@ function Invoke-OptimizationProfile {
     }
     Set-OptimizerCurrentProfile -Name $Name
     try {
+        if ($sessionBoundMaximum) {
+            # Nao execute ajustes persistentes de Game Mode, captura ou startup
+            # antes da sessao que promete restaurar os recursos alterados.
+            $sessionResult = Invoke-TransientGameProfile -ExecutablePath $GameExecutable -Priority AboveNormal `
+                -SuspendServices $SelectedServices -PowerPlan HighPerformance -PreventSleep $true `
+                -ReduceVisualEffects $true -UseConfiguredProcessList $true
+            return [pscustomobject]@{ ProfileResults = @(); GameSession = $sessionResult }
+        }
         $profileResults = Invoke-OptimizerOperation -Name "Aplicar perfil $Name" `
             -Risk $(switch ($Name) { 'Safe' { 'Seguro' } 'Balanced' { 'Moderado' } default { 'Agressivo' } }) `
             -RequiresAdministrator -ScriptBlock {
@@ -141,23 +154,16 @@ function Invoke-OptimizationProfile {
 
             $results.Add((Invoke-KnownProfileCommand 'Set-GameModeState' @{ Enabled = $true } -Optional))
             $results.Add((Invoke-KnownProfileCommand 'Set-GameCaptureState' @{ Disabled = $true } -Optional))
-            if (-not $sessionBoundMaximum) {
-                $visualProfile = if ($Name -eq 'MaximumFPS') { 'MaximumPerformance' } else { 'Balanced' }
-                $results.Add((Invoke-KnownProfileCommand 'Set-VisualEffectsProfile' @{ Profile = $visualProfile } -Optional))
-            }
-            if ($Name -eq 'MaximumFPS' -and -not $sessionBoundMaximum) {
-                $results.Add((Invoke-KnownProfileCommand 'Enable-UltimatePerformancePlan' @{} -Optional))
-            }
-            elseif ($Name -ne 'MaximumFPS') { $results.Add((Invoke-KnownProfileCommand 'Set-HighPerformancePlan' @{} -Optional)) }
-            $results.Add((Invoke-KnownProfileCommand 'Set-TailoredExperiencesDisabled' @{ Disabled = $true } -Optional))
-            $results.Add((Invoke-KnownProfileCommand 'Set-ThirdPartySuggestionsDisabled' @{ Disabled = $true } -Optional))
+            $results.Add((Invoke-KnownProfileCommand 'Set-VisualEffectsProfile' @{ Profile = 'Balanced' } -Optional))
+            # Energia e privacidade continuam como escolhas explicitas na interface.
+            # Planos agressivos podem aumentar temperatura e prejudicar o boost sustentado.
 
             foreach ($startupId in $SelectedStartupIds) { $results.Add((Disable-StartupItem -Id $startupId)) }
             if ($IncludeCleanup) {
-                $results.Add((Invoke-SafeCleanup -Categories @('UserTemp', 'DirectXCache') -Confirmed))
+                $results.Add((Invoke-SafeCleanup -Categories @('UserTemp') -Confirmed))
             }
 
-            if ($Name -in @('Balanced', 'MaximumFPS') -and -not $sessionBoundMaximum) {
+            if ($Name -eq 'Balanced') {
                 foreach ($service in $SelectedServices) {
                     $results.Add((Set-OptionalServiceState -Name $service -DesiredState Disabled))
                 }
@@ -170,14 +176,6 @@ function Invoke-OptimizationProfile {
             }
 
             return $results.ToArray()
-        }
-        # A sessao nao pode ser aninhada na transacao do perfil. Depois do commit,
-        # executa uma configuracao transitoria, sem alterar a biblioteca de jogos.
-        if ($sessionBoundMaximum) {
-            $sessionResult = Invoke-TransientGameProfile -ExecutablePath $GameExecutable -Priority High `
-                -SuspendServices $SelectedServices -PowerPlan Ultimate -PreventSleep $true `
-                -ReduceVisualEffects $true -UseConfiguredProcessList $true
-            return [pscustomobject]@{ ProfileResults = @($profileResults); GameSession = $sessionResult }
         }
         return $profileResults
     }

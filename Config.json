@@ -1,7 +1,7 @@
 {
   "App": {
     "Name": "Windows FPS Optimizer",
-    "Version": "1.0.1",
+    "Version": "1.1.0",
     "SchemaVersion": 1,
     "Language": "pt-BR",
     "DefaultSimulation": true,
@@ -217,16 +217,16 @@
     },
     "Weights": {
       "Startup": 12,
-      "Processes": 10,
+      "Processes": 0,
       "Cpu": 12,
       "Ram": 12,
       "DiskFree": 10,
-      "PowerPlan": 8,
+      "PowerPlan": 0,
       "GameMode": 8,
       "Capture": 8,
-      "OptionalServices": 6,
-      "VisualEffects": 6,
-      "BackgroundApps": 4,
+      "OptionalServices": 0,
+      "VisualEffects": 0,
+      "BackgroundApps": 0,
       "Integrity": 4
     }
   }

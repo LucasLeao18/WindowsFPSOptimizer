@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
@@ -277,6 +277,24 @@
                         </Border>
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
+                                <TextBlock Text="Comparar desempenho antes e depois" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="Importe duas capturas CSV do PresentMon com MsBetweenPresents (--v1_metrics), de um único jogo e swap chain. Mantenha a mesma cena e configurações; aqueça o jogo antes de capturar." Style="{StaticResource MutedText}" Margin="0,0,0,8"/>
+                                <Button x:Name="BtnCompareBenchmarks" Content="Comparar dois CSVs" HorizontalAlignment="Left"/>
+                                <DataGrid x:Name="BenchmarkGrid" Height="205" AutoGenerateColumns="False" SelectionMode="Single">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Métrica" Binding="{Binding Name}" Width="*"/>
+                                        <DataGridTextColumn Header="Antes" Binding="{Binding Before, StringFormat=F2}" Width="90"/>
+                                        <DataGridTextColumn Header="Depois" Binding="{Binding After, StringFormat=F2}" Width="90"/>
+                                        <DataGridTextColumn Header="Unidade" Binding="{Binding Unit}" Width="75"/>
+                                        <DataGridTextColumn Header="Variação %" Binding="{Binding ChangePercent, StringFormat=F2}" Width="95"/>
+                                        <DataGridTextColumn Header="Melhor quando" Binding="{Binding BetterWhen}" Width="115"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock x:Name="BenchmarkSummaryText" Text="Nenhuma captura comparada. FPS médio, 1% low e percentis serão calculados a partir dos intervalos medidos; a nota de configuração não mede FPS." Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
                                 <TextBlock Text="Recomendações específicas" Style="{StaticResource SectionTitle}"/>
                                 <DataGrid x:Name="RecommendationsGrid" Height="230" AutoGenerateColumns="True"/>
                                 <WrapPanel Margin="0,10,0,0">
@@ -331,6 +349,7 @@
                                     <Button x:Name="BtnOpenGameBar" Content="Abrir Game Bar"/>
                                     <Button x:Name="BtnOpenHags" Content="Abrir HAGS"/>
                                     <Button x:Name="BtnOpenGraphicsSettings" Content="Preferência de GPU"/>
+                                    <Button x:Name="BtnWindowedGames" Content="Otimizações para jogos em janela" ToolTip="Windows 11 22H2+: revise a opção em Gráficos para jogos DX10/DX11 em janela ou sem bordas. Reinicie o jogo após alterar."/>
                                     <Button x:Name="BtnOpenFocus" Content="Não Perturbe / Foco"/>
                                     <Button x:Name="BtnOpenNotifications" Content="Notificações"/>
                                 </WrapPanel>
@@ -346,7 +365,7 @@
                                 <WrapPanel>
                                     <CheckBox x:Name="GameSessionCloseProcessesCheck" Content="Fechar processos selecionados" IsChecked="True"/>
                                     <CheckBox x:Name="GameSessionServicesCheck" Content="Parar serviços opcionais selecionados"/>
-                                    <CheckBox x:Name="GameSessionPowerCheck" Content="Usar plano de alto desempenho" IsChecked="True"/>
+                                    <CheckBox x:Name="GameSessionPowerCheck" Content="Usar plano de alto desempenho" ToolTip="Opcional: compare capturas e temperatura antes de adotar este plano."/>
                                     <CheckBox x:Name="GameSessionPreventSleepCheck" Content="Impedir suspensão" IsChecked="True"/>
                                     <CheckBox x:Name="GameSessionVisualCheck" Content="Reduzir efeitos visuais" IsChecked="True"/>
                                     <CheckBox x:Name="GameSessionDoNotDisturbCheck" Content="Abrir Não Perturbe" IsChecked="True"/>
@@ -624,7 +643,7 @@
                     <StackPanel>
                         <UniformGrid Columns="3">
                             <Border Style="{StaticResource CardStyle}" BorderBrush="{StaticResource SuccessBrush}"><StackPanel>
-                                <TextBlock Text="Perfil seguro" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Game Mode, captura suportada, visuais equilibrados, energia e preferências de baixo risco." Style="{StaticResource MutedText}" Margin="0,8,0,16"/>
+                                <TextBlock Text="Perfil seguro" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Game Mode, captura suportada e visuais equilibrados. Preserva o plano de energia e as preferências de privacidade." Style="{StaticResource MutedText}" Margin="0,8,0,16"/>
                                 <Button x:Name="BtnProfileSafe" Content="Aplicar perfil seguro" Style="{StaticResource PrimaryButton}"/>
                             </StackPanel></Border>
                             <Border Style="{StaticResource CardStyle}" BorderBrush="{StaticResource WarningBrush}"><StackPanel>
@@ -638,7 +657,7 @@
                         </UniformGrid>
                         <Border Style="{StaticResource CardStyle}"><StackPanel>
                             <TextBlock Text="Seleções compartilhadas pelos perfis" Style="{StaticResource SectionTitle}"/>
-                            <CheckBox x:Name="ProfileIncludeCleanupCheck" Content="Incluir limpeza de temporários/cache (irreversível; confirmação separada)"/>
+                            <CheckBox x:Name="ProfileIncludeCleanupCheck" Content="Incluir limpeza de temporários antigos do usuário (irreversível; confirmação separada)"/>
                             <TextBlock Text="Serviços, tarefas, processos e itens de inicialização são escolhidos nas respectivas páginas. Nenhum serviço essencial entra automaticamente." Style="{StaticResource MutedText}"/>
                         </StackPanel></Border>
                     </StackPanel>
@@ -658,7 +677,7 @@
                                 <StackPanel Margin="0,0,8,0"><TextBlock Text="Nome"/><TextBox x:Name="GameProfileNameTextBox" Width="220" automation:AutomationProperties.Name="Nome do perfil do jogo"/></StackPanel>
                                 <StackPanel Margin="0,0,8,0"><TextBlock Text="Argumentos opcionais"/><TextBox x:Name="GameProfileArgumentsTextBox" Width="260" automation:AutomationProperties.Name="Argumentos de linha de comando do jogo"/></StackPanel>
                                 <StackPanel Margin="0,0,8,0"><TextBlock Text="Prioridade"/><ComboBox x:Name="GameProfilePriorityCombo" Width="160"><ComboBoxItem Content="Normal"/><ComboBoxItem Content="AboveNormal" IsSelected="True"/><ComboBoxItem Content="High"/></ComboBox></StackPanel>
-                                <StackPanel Margin="0,0,8,0"><TextBlock Text="Plano durante o jogo"/><ComboBox x:Name="GameProfilePowerCombo" Width="190"><ComboBoxItem Content="None"/><ComboBoxItem Content="HighPerformance" IsSelected="True"/><ComboBoxItem Content="Ultimate"/><ComboBoxItem Content="Custom"/></ComboBox></StackPanel>
+                                <StackPanel Margin="0,0,8,0"><TextBlock Text="Plano durante o jogo"/><ComboBox x:Name="GameProfilePowerCombo" Width="190"><ComboBoxItem Content="None" IsSelected="True"/><ComboBoxItem Content="HighPerformance"/><ComboBoxItem Content="Ultimate"/><ComboBoxItem Content="Custom"/></ComboBox></StackPanel>
                             </WrapPanel>
                             <WrapPanel>
                                 <CheckBox x:Name="GameProfilePreventSleepCheck" Content="Impedir suspensão" IsChecked="True"/>

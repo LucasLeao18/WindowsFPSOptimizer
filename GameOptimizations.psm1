@@ -13,6 +13,7 @@ $script:GameSettingsPages = @{
     Captures         = @{ Uri = 'ms-settings:gaming-gamedvr'; MinimumBuild = 10240 }
     Hags             = @{ Uri = 'ms-settings:display-advancedgraphics-default'; MinimumBuild = 19041 }
     Graphics         = @{ Uri = 'ms-settings:display-advancedgraphics'; MinimumBuild = 17134 }
+    WindowedGames    = @{ Uri = 'ms-settings:display-advancedgraphics'; MinimumBuild = 22621 }
     DoNotDisturbGame = @{ Uri = 'ms-settings:quietmomentsgame'; MinimumBuild = 16299 }
     DoNotDisturb     = @{ Uri = 'ms-settings:quiethours'; MinimumBuild = 15063 }
     Notifications    = @{ Uri = 'ms-settings:notifications'; MinimumBuild = 10240 }
@@ -238,7 +239,7 @@ function Set-GameCaptureState {
 
 function Get-ManualGamingFeatureState {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][ValidateSet('GameBar', 'Captures', 'Hags', 'Graphics', 'DoNotDisturbGame', 'DoNotDisturb', 'Notifications', 'FullscreenOptimizations')][string]$Feature)
+    param([Parameter(Mandatory = $true)][ValidateSet('GameBar', 'Captures', 'Hags', 'Graphics', 'WindowedGames', 'DoNotDisturbGame', 'DoNotDisturb', 'Notifications', 'FullscreenOptimizations')][string]$Feature)
 
     $platform = Get-WindowsPlatformInfo
     if ($Feature -eq 'FullscreenOptimizations') {
@@ -276,6 +277,7 @@ function Get-GameOptimizationCapabilities {
         Captures               = Get-ManualGamingFeatureState -Feature Captures
         Hags                   = Get-ManualGamingFeatureState -Feature Hags
         GpuPreference          = Get-ManualGamingFeatureState -Feature Graphics
+        WindowedGames          = Get-ManualGamingFeatureState -Feature WindowedGames
         DoNotDisturb           = Get-ManualGamingFeatureState -Feature DoNotDisturbGame
         FullscreenOptimizations = Get-ManualGamingFeatureState -Feature FullscreenOptimizations
         SafetyNotes            = @(
@@ -289,7 +291,7 @@ function Get-GameOptimizationCapabilities {
 
 function Open-WindowsGamingSettings {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][ValidateSet('GameMode', 'GameBar', 'Captures', 'Hags', 'Graphics', 'DoNotDisturbGame', 'DoNotDisturb', 'Notifications')][string]$Page)
+    param([Parameter(Mandatory = $true)][ValidateSet('GameMode', 'GameBar', 'Captures', 'Hags', 'Graphics', 'WindowedGames', 'DoNotDisturbGame', 'DoNotDisturb', 'Notifications')][string]$Page)
 
     $definition = $script:GameSettingsPages[$Page]
     $platform = Get-WindowsPlatformInfo
@@ -590,7 +592,7 @@ function Add-GameProfile {
         [ValidateSet('Normal', 'AboveNormal', 'High')][string]$Priority = 'AboveNormal',
         [string[]]$CloseProcesses = @(),
         [string[]]$SuspendServices = @(),
-        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'HighPerformance',
+        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'None',
         [bool]$PreventSleep = $true,
         [bool]$ReduceVisualEffects = $false,
         [bool]$OpenDoNotDisturbSettings = $false,
@@ -866,7 +868,7 @@ function Start-GameSessionInternal {
         [string]$ProfileId = '',
         [string[]]$CloseProcesses = @(),
         [string[]]$SuspendServices = @(),
-        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'HighPerformance',
+        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'None',
         [bool]$PreventSleep = $true,
         [bool]$ReduceVisualEffects = $false,
         [bool]$UseConfiguredProcessList = $true,
@@ -1010,7 +1012,7 @@ function Start-GameSession {
         [string]$ProfileId = '',
         [string[]]$CloseProcesses = @(),
         [string[]]$SuspendServices = @(),
-        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'HighPerformance',
+        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'None',
         [bool]$PreventSleep = $true,
         [bool]$ReduceVisualEffects = $false,
         [bool]$UseConfiguredProcessList = $true,
@@ -1285,7 +1287,7 @@ function Invoke-TransientGameProfile {
         [ValidateSet('Normal', 'AboveNormal', 'High')][string]$Priority = 'AboveNormal',
         [string[]]$CloseProcesses = @(),
         [string[]]$SuspendServices = @(),
-        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'HighPerformance',
+        [ValidateSet('None', 'HighPerformance', 'Ultimate', 'Custom')][string]$PowerPlan = 'None',
         [bool]$PreventSleep = $true,
         [bool]$ReduceVisualEffects = $false,
         [bool]$OpenDoNotDisturbSettings = $false,

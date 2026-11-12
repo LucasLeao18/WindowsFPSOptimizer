@@ -1,10 +1,14 @@
 # Windows FPS Optimizer
 
+[Baixar instalador EXE v1.1.0](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/download/v1.1.0/WindowsFPSOptimizer-1.1.0-Setup.exe) · [Releases e hashes](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases) · [Histórico de mudanças](CHANGELOG.md)
+
 Aplicativo gráfico, local e offline para analisar e ajustar o próprio Windows 10 ou Windows 11 antes de jogos. Ele foi escrito em Windows PowerShell 5.1, usa WPF e não depende de módulos de terceiros.
 
-O objetivo é reduzir trabalho dispensável em segundo plano, manter configurações de energia coerentes durante uma sessão de jogo e tornar mudanças reversíveis sempre que o Windows permitir. O aplicativo **não mede, estima nem promete FPS**. O resultado depende do jogo, do driver, do hardware, da temperatura, da carga em segundo plano e da configuração original.
+O objetivo é reduzir trabalho dispensável em segundo plano, manter configurações de energia coerentes durante uma sessão de jogo e tornar mudanças reversíveis sempre que o Windows permitir. O aplicativo compara FPS e tempos de quadro de capturas externas do PresentMon, sem prometer ganhos. O resultado depende do jogo, do driver, do hardware, da temperatura, da carga em segundo plano e da configuração original.
 
 > **Segurança por padrão:** `Config.json` inicia o aplicativo em modo de simulação. Abrir o programa normalmente não aplica mudanças. Alterações reais são permitidas somente na cópia instalada pelo `Setup.exe` sob `Program Files`; depois disso ainda é necessário desativar a simulação, confirmar as ações e aceitar UAC quando solicitado.
+
+As releases incluem instalador, SHA-256, metadados do build e código-fonte. O workflow `Windows build and installer validation` compila em Windows Server 2022 e testa o EXE final em um runner descartável: instalação silenciosa (`/quiet`), código de saída e hashes de todos os arquivos instalados. O modo silencioso mantém a exigência de administrador e as verificações do instalador. O EXE não recebe assinatura Authenticode quando um certificado não é fornecido ao build.
 
 ## Limites do projeto
 
@@ -120,6 +124,7 @@ Core.psm1                     Contexto, guardas, transações e comandos seguros
 Logging.psm1                  Log TXT/JSONL e relatórios TXT/CSV/JSON/HTML
 BackupManager.psm1            Manifestos, exportação .reg, importação e restauração
 SystemAnalysis.psm1           Inventário, métricas, pontuação e recomendações
+Benchmark.psm1                Importação e comparação de capturas CSV do PresentMon
 GameOptimizations.psm1        Game Mode, capturas, perfis e sessão de jogo
 PowerOptimizations.psm1       Planos, CPU, resfriamento, tela e suspensão
 GraphicsOptimizations.psm1    GPU/driver, HAGS manual, efeitos e caches gráficos
@@ -242,7 +247,7 @@ Legenda de restauração:
 | Recomendações do Iniciar | Interface/Privacidade | Controla `Start_IrisRecommendations` no usuário atual | Menu Iniciar mais limpo | Seguro | Windows 11 | Não normalmente | Completa |
 | Tarefas opcionais | Tarefas agendadas | Desativa individualmente apenas tarefas allowlisted; não as exclui | Evitar execuções periódicas opcionais | Moderado | Tarefa precisa existir | Não | Completa |
 | Ponto de restauração | Segurança | Solicita `Checkpoint-Computer` e registra sucesso/erro no manifesto | Contingência adicional ao backup granular | Seguro | Proteção do Sistema/limite do Windows | Não | N/A; usar `rstrui.exe` para restaurar sistema |
-| Perfil Seguro | Perfis | Game Mode/captura quando suportados, visual equilibrado, Alto Desempenho, privacidade básica e startup selecionado | Aplicar conjunto conservador e explicável | Seguro | Conforme capacidades | Possível | Completa, exceto limpeza opcional marcada |
+| Perfil Seguro | Perfis | Game Mode/captura quando suportados, visual equilibrado e startup selecionado; preserva energia e privacidade | Aplicar conjunto conservador e explicável | Seguro | Conforme capacidades | Possível | Completa, exceto limpeza opcional marcada |
 | Perfil Equilibrado | Perfis | Acrescenta serviços/tarefas selecionados e paginação automática | Reduzir atividade escolhida sem tocar essenciais | Moderado | Conforme capacidades | Possível | Completa, exceto limpeza opcional marcada |
 | Perfil Máximo FPS | Perfis | Exige um `.exe` válido e executa energia, visuais, serviços e processos numa sessão monitorada | Preparar temporariamente o ambiente com escolhas agressivas | Agressivo | Conforme capacidades | Possível | Melhor esforço automático ao término; limpeza opcional continua separada |
 | Perfil por jogo | Jogos/Programas | Salva executável, argumentos, prioridade, processos, serviços, energia e visuais por jogo | Repetir uma sessão consistente sem alterar arquivos do jogo | Moderado | W10/W11 | Não | Configuração removível; sessão com restauração automática |
@@ -313,10 +318,9 @@ Os perfis automáticos **preservam miniaturas e suavização de fontes**. O perf
 - solicita Game Mode quando a build permite;
 - desativa Game DVR somente onde a política é suportada;
 - usa o perfil visual Equilibrado;
-- ativa Alto Desempenho;
-- aplica experiências personalizadas e sugestões de terceiros quando compatíveis;
+- preserva o plano de energia atual e as preferências de privacidade; essas opções continuam disponíveis individualmente;
 - desativa somente os itens de inicialização selecionados;
-- inclui temporários do usuário/DirectX apenas se a caixa irreversível for marcada.
+- inclui somente temporários antigos do usuário se a caixa irreversível for marcada. O cache de shaders permanece intacto; a limpeza manual de caches continua disponível para diagnóstico.
 
 ### Equilibrado
 
@@ -332,6 +336,10 @@ Inclui tudo do Seguro e também:
 
 Exige um executável local válido antes de iniciar qualquer transação. Os ajustes agressivos são executados em uma sessão transitória monitorada, sem criar nem sobrescrever silenciosamente a biblioteca de perfis; energia, serviços, processos, prioridade e efeitos da sessão são restaurados ao término. Sem `.exe`, a ação é recusada sem criar backup nem estado de sessão.
 
+Usa `AboveNormal` e Alto Desempenho temporariamente. Não altera Game Mode, capturas, tarefas ou inicialização antes da sessão. A interface permanece disponível para encerrar e restaurar a sessão, inclusive ao fechar a janela. Limpeza irreversível é recusada nesse perfil. Ultimate e prioridade High continuam como escolhas individuais; compare capturas e temperatura antes de adotá-los.
+
+Novos perfis de jogos e sessões avulsas preservam energia por padrão (`PowerPlan = 'None'`); perfis já salvos mantêm a escolha anterior. A caixa de Alto Desempenho permanece desmarcada até ser escolhida explicitamente.
+
 O nome “Máximo FPS” descreve o nível de agressividade, não um resultado mensurável garantido. O perfil não desativa Defender, Update, rede, serviços essenciais, Xbox/Gaming Services automaticamente, BIOS ou proteções do Windows.
 
 ## Análise e pontuação
@@ -341,21 +349,56 @@ O nome “Máximo FPS” descreve o nível de agressividade, não um resultado m
 | Componente | Peso máximo | Observação |
 |---|---:|---|
 | Inicialização | 12 | Bom até 8 itens; alerta a partir de 15 |
-| Processos | 10 | Bom até 120; alerta a partir de 190; a contagem é contextual |
+| Processos | 0 | Inventário; contagem não indica carga nem FPS |
 | CPU em repouso | 12 | Bom até 5%; alerta a partir de 12%; é uma amostra instantânea |
 | RAM em repouso | 12 | Bom até 55%; alerta a partir de 75%; cache do Windows é normal |
 | Espaço livre | 10 | Bom com 20%+; alerta abaixo de 10% |
-| Plano de energia | 8 | Alto desempenho não é automaticamente melhor em todo hardware |
+| Plano de energia | 0 | Não penaliza Balanced ou planos do fabricante |
 | Game Mode | 8 | Só entra quando o estado é determinável |
 | Capturas | 8 | Só entra quando o estado é determinável |
-| Serviços opcionais | 6 | Não incentiva encerrar serviços essenciais |
-| Efeitos visuais | 6 | Afeta sobretudo o desktop |
-| Aplicativos em segundo plano | 4 | Peso reservado; estado global não é forçado nem presumido |
+| Serviços opcionais | 0 | Serviço ativo não é evidência de consumo relevante |
+| Efeitos visuais | 0 | Afeta sobretudo o desktop |
+| Aplicativos em segundo plano | 0 | Contagem isolada não indica gargalo |
 | Integridade | 4 | Só deve contar quando houver resultado conhecido |
 
 A integridade só entra na pontuação depois que uma saída de SFC ou DISM corresponde a uma regra conservadora conhecida em português ou inglês. O aplicativo persiste ferramenta, modo, horário UTC, código de saída e evidência resumida; saídas desconhecidas e reparos ainda não verificados permanecem “inconclusivos”. Resultados expiram após 30 dias; um resultado inconclusivo vigente nunca é mascarado por outra ferramenta e não recebe pontos.
 
 Componentes indisponíveis ou indeterminados são omitidos em vez de receber uma nota inventada. O uso de disco por processo exibido na lista é taxa de I/O em MB/s, não percentual físico do disco. O estado de atualizações é somente histórico local e reinicialização pendente; o aplicativo não pesquisa a Internet.
+
+A CPU por processo é normalizada pelo total de processadores lógicos (0–100% do computador). Contadores ausentes de CPU e I/O ficam indeterminados, em vez de aparentarem consumo zero. Energia, contagens de processos/serviços/aplicativos e efeitos visuais não entram na nota, inclusive com configurações antigas. A sugestão de revisar aplicativos em segundo plano exige também carga de CPU elevada.
+
+## Comparar FPS e estabilidade (1.1.0)
+
+Na página **Início**, use **Comparar dois CSVs** e escolha primeiro a captura anterior e depois a posterior. A importação funciona sem administrador, inclusive em simulação e somente leitura. O otimizador não inicia capturas nem baixa ferramentas.
+
+Gere os CSVs com o [PresentMon oficial](https://github.com/GameTechDev/PresentMon). Exemplo para o console que oferece `--v1_metrics`:
+
+```powershell
+.\PresentMon.exe --process_name jogo.exe --v1_metrics --delay 10 --timed 60 --terminate_after_timed --output_file antes.csv
+# Repita a mesma cena após mudar uma única opção, usando --output_file depois.csv.
+```
+
+Use um único jogo/processo/swap chain em cada arquivo, separador vírgula e decimais com ponto. O módulo exige `MsBetweenPresents` em milissegundos e aceita arquivos de até 128 MB/dois milhões de linhas. Capturas misturadas são recusadas para não somar frames de fluxos diferentes. Pelo módulo é possível selecionar um fluxo explicitamente:
+
+```powershell
+Import-Module .\Benchmark.psm1
+$antes = Import-FrameTimeCapture .\antes.csv -ProcessId 1234 -SwapChainAddress '0x1234' -WarmupFrames 120
+$depois = Import-FrameTimeCapture .\depois.csv -ProcessId 5678 -SwapChainAddress '0x5678' -WarmupFrames 120
+(Compare-FrameTimeCapture $antes $depois).Metrics | Format-Table
+```
+
+- FPS médio: `1000 / média dos intervalos`, sem fazer média de FPS instantâneos.
+- 1% low: `1000 / média dos ceil(N × 0,01) intervalos mais lentos`. Ferramentas com outras definições podem mostrar valores diferentes.
+- P95/P99: percentis nearest-rank dos intervalos; menores são melhores. O pior quadro também é exibido.
+- Intervalos zero são contabilizados separadamente e omitidos; números inválidos, negativos ou não finitos são recusados. Travadas válidas não são removidas como outliers.
+
+Essas métricas representam intervalos de apresentação, sem medir latência de entrada ou FPS exibido com geração de quadros. Aqueça o jogo e o cache de shaders antes da captura. Repita de três a cinco capturas alternadas com a mesma cena, duração, resolução, limite de FPS, driver e condições térmicas. Capturas curtas e diferenças de duração recebem avisos; uma comparação isolada não comprova ganho.
+
+No Windows 11 22H2+, a página **Jogos** também oferece **Otimizações para jogos em janela**, abrindo Gráficos para revisão manual. O recurso se aplica a jogos DX10/DX11 em janela/sem bordas e exige reiniciar o jogo após alterar. HAGS continua como opção manual dependente do hardware e driver.
+
+Referências técnicas consultadas em 12/11/2026: [otimizações para jogos em janela](https://support.microsoft.com/en-us/windows/hardware/display-graphics/optimizations-for-windowed-games-in-windows-11), [contadores de CPU e múltiplos processadores](https://learn.microsoft.com/en-us/windows/win32/perfctrs/collecting-performance-data), [formato CSV do PresentMon](https://github.com/GameTechDev/PresentMon/blob/main/README-ConsoleApplication.md), [cache de shaders como diagnóstico](https://nvidia.custhelp.com/app/answers/detail/a_id/5735) e [opções de temporizador do BCDEdit destinadas à depuração](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set). Não são aplicados ajustes de HPET/BCD, desativação de segurança, core parking ou limpeza artificial de RAM.
+
+Execute `powershell.exe -NoProfile -File .\Tests\Test-PerformanceImprovements.ps1` para verificar fórmulas, filtros de capturas, padrões dos perfis, pontuação e CPU normalizada com fixtures isoladas. O build também executa esse teste.
 
 ## Backup e restauração
 

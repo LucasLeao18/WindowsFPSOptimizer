@@ -195,15 +195,13 @@ function Get-PerformanceAssessment {
     $weights = $config.Weights
     $components = New-Object System.Collections.Generic.List[object]
     function Add-Component([string]$Name, $Value, [double]$Weight, $Ratio, [string]$Reason) {
-        if ($null -eq $Value -or $null -eq $Ratio) { return }
+        if ($null -eq $Value -or $null -eq $Ratio -or $Weight -le 0) { return }
         $safeRatio = [math]::Max(0, [math]::Min(1, [double]$Ratio))
         $components.Add([pscustomobject]@{ Name = $Name; Value = $Value; Weight = $Weight; Ratio = $safeRatio; Points = $Weight * $safeRatio; Reason = $Reason })
     }
 
     Add-Component 'Inicializacao' $Snapshot.StartupCount ([double]$weights.Startup) `
         (Get-ThresholdScore $Snapshot.StartupCount $threshold.StartupGood $threshold.StartupWarning) 'Menos itens tende a reduzir atividade apos o logon.'
-    Add-Component 'Processos' $Snapshot.ProcessCount ([double]$weights.Processes) `
-        (Get-ThresholdScore $Snapshot.ProcessCount $threshold.ProcessesGood $threshold.ProcessesWarning) 'A contagem e contextual; nao e uma meta para encerrar processos do sistema.'
     Add-Component 'CPU em repouso' $Snapshot.CpuPercent ([double]$weights.Cpu) `
         (Get-ThresholdScore $Snapshot.CpuPercent $threshold.IdleCpuGoodPercent $threshold.IdleCpuWarningPercent) 'Amostra instantanea; feche cargas intencionais antes de analisar.'
     Add-Component 'RAM em repouso' $Snapshot.RamPercent ([double]$weights.Ram) `
@@ -211,22 +209,8 @@ function Get-PerformanceAssessment {
     Add-Component 'Espaco livre' $Snapshot.DiskFreePercent ([double]$weights.DiskFree) `
         (Get-ThresholdScore $Snapshot.DiskFreePercent $threshold.DiskFreeGoodPercent $threshold.DiskFreeWarningPercent -HigherIsBetter) 'Pouco espaco pode prejudicar updates, pagefile e caches.'
 
-    if ($null -ne $Snapshot.PowerPlanOptimized) { Add-Component 'Plano de energia' $Snapshot.PowerPlanOptimized ([double]$weights.PowerPlan) $(if ($Snapshot.PowerPlanOptimized) { 1 } else { 0.45 }) 'Alto desempenho pode elevar consumo e temperatura.' }
     if ($null -ne $Snapshot.GameModeEnabled) { Add-Component 'Game Mode' $Snapshot.GameModeEnabled ([double]$weights.GameMode) $(if ($Snapshot.GameModeEnabled) { 1 } else { 0 }) 'Recurso suportado pelo Windows; beneficio varia.' }
     if ($null -ne $Snapshot.CaptureDisabled) { Add-Component 'Capturas' $Snapshot.CaptureDisabled ([double]$weights.Capture) $(if ($Snapshot.CaptureDisabled) { 1 } else { 0 }) 'Gravacao ativa pode consumir GPU, CPU e disco.' }
-    if ($null -ne $Snapshot.OptionalServicesActive) {
-        $ratio = if ($Snapshot.OptionalServicesActive -le 1) { 1 } elseif ($Snapshot.OptionalServicesActive -le 4) { 0.7 } else { 0.4 }
-        Add-Component 'Servicos opcionais' $Snapshot.OptionalServicesActive ([double]$weights.OptionalServices) $ratio 'Servicos opcionais so devem ser alterados se o recurso nao for usado.'
-    }
-    if ($null -ne $Snapshot.BackgroundApps) {
-        Add-Component 'Aplicativos em segundo plano' $Snapshot.BackgroundApps ([double]$weights.BackgroundApps) `
-            (Get-ThresholdScore $Snapshot.BackgroundApps $threshold.BackgroundAppsGood $threshold.BackgroundAppsWarning) `
-            'Estimativa explicita de processos opcionais da sessao interativa; nao representa servicos do sistema.'
-    }
-    if ($null -ne $Snapshot.VisualProfile) {
-        $ratio = switch ([string]$Snapshot.VisualProfile) { 'MaximumPerformance' { 1 } 'Balanced' { 0.8 } default { 0.55 } }
-        Add-Component 'Efeitos visuais' $Snapshot.VisualProfile ([double]$weights.VisualEffects) $ratio 'Efeitos visuais afetam mais a interface do que FPS do jogo.'
-    }
     if ($null -ne $Snapshot.IntegrityHealthy) { Add-Component 'Integridade' $Snapshot.IntegrityHealthy ([double]$weights.Integrity) $(if ($Snapshot.IntegrityHealthy) { 1 } else { 0 }) 'Baseado apenas em verificacoes executadas.' }
 
     $maximum = if ($components.Count -gt 0) { [double](($components.ToArray() | Measure-Object Weight -Sum).Sum) } else { [double]0 }
@@ -260,9 +244,6 @@ function Get-PerformanceRecommendations {
     if ($Snapshot.CaptureDisabled -eq $false) {
         $recommendations.Add((New-PerformanceRecommendation 'capture' 'Revisar capturas em segundo plano' 'Ativas ou indeterminadas' 'Desativadas' 'Evita gravacao concorrente.' 'Seguro' $false 'games.capture'))
     }
-    if ($null -ne $Snapshot.PowerPlanOptimized -and -not $Snapshot.PowerPlanOptimized) {
-        $recommendations.Add((New-PerformanceRecommendation 'power-plan' 'Usar Alto Desempenho durante jogos' $Snapshot.PowerPlanName 'Alto Desempenho' 'Pode reduzir transicoes conservadoras; aumenta consumo/temperatura.' 'Moderado' $false 'power.high-performance'))
-    }
     if ($Snapshot.StartupCount -gt (Get-OptimizerContext).Config.Analysis.Thresholds.StartupWarning) {
         $recommendations.Add((New-PerformanceRecommendation 'startup' 'Revisar inicializacao' "$($Snapshot.StartupCount) itens" 'Desativar apenas itens opcionais selecionados' 'Menos atividade apos o logon.' 'Moderado' $false 'startup.review'))
     }
@@ -275,11 +256,9 @@ function Get-PerformanceRecommendations {
     if ($null -ne $Snapshot.DiskFreePercent -and $Snapshot.DiskFreePercent -lt (Get-OptimizerContext).Config.Analysis.Thresholds.DiskFreeWarningPercent) {
         $recommendations.Add((New-PerformanceRecommendation 'disk' 'Liberar espaco com seguranca' "$($Snapshot.DiskFreePercent)% livre" 'Limpar apenas temporarios/caches escolhidos' 'Mantem espaco para pagefile, caches e manutencao.' 'Moderado' $false 'storage.cleanup'))
     }
-    if ($Snapshot.OptionalServicesActive -gt 0) {
-        $recommendations.Add((New-PerformanceRecommendation 'services' 'Revisar servicos opcionais' "$($Snapshot.OptionalServicesActive) ativos" 'Escolher individualmente' 'Beneficio pequeno e dependente do uso de cada recurso.' 'Moderado' $true 'services.review'))
-    }
     if ($null -ne $Snapshot.BackgroundApps -and
-        $Snapshot.BackgroundApps -gt (Get-OptimizerContext).Config.Analysis.Thresholds.BackgroundAppsWarning) {
+        $Snapshot.BackgroundApps -gt (Get-OptimizerContext).Config.Analysis.Thresholds.BackgroundAppsWarning -and
+        $null -ne $Snapshot.CpuPercent -and $Snapshot.CpuPercent -gt (Get-OptimizerContext).Config.Analysis.Thresholds.IdleCpuWarningPercent) {
         $recommendations.Add((New-PerformanceRecommendation 'background-apps' 'Revisar aplicativos em segundo plano' `
             "$($Snapshot.BackgroundApps) processos opcionais estimados" 'Revisar e fechar somente aplicativos reconhecidos' `
             'Pode liberar CPU e RAM quando os aplicativos estiverem realmente ociosos.' 'Seguro' $false 'process.review'))

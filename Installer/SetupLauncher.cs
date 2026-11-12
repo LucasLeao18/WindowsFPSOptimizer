@@ -30,14 +30,27 @@ namespace WindowsFPSOptimizer.Setup
         private const string PayloadSha256 = "__PAYLOAD_SHA256__";
 
         [STAThread]
-        private static int Main()
+        private static int Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
             string stagingDirectory = null;
+            bool quiet = Array.Exists(args, delegate(string argument)
+            {
+                return String.Equals(argument, "/quiet", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(argument, "--quiet", StringComparison.OrdinalIgnoreCase);
+            });
             try
             {
+                foreach (string argument in args)
+                {
+                    if (!String.Equals(argument, "/quiet", StringComparison.OrdinalIgnoreCase) &&
+                        !String.Equals(argument, "--quiet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ArgumentException("Argumento desconhecido: " + argument);
+                    }
+                }
                 if (!IsAdministrator())
                 {
                     throw new InvalidOperationException(
@@ -182,7 +195,7 @@ namespace WindowsFPSOptimizer.Setup
                         installedScript);
                 }
 
-                MessageBox.Show(
+                if (!quiet) MessageBox.Show(
                     AppName + " " + AppVersion +
                     " foi instalado com sucesso.\n\n" +
                     "Procure o atalho na Area de Trabalho ou no Menu Iniciar. " +
@@ -196,7 +209,11 @@ namespace WindowsFPSOptimizer.Setup
             }
             catch (Exception exception)
             {
-                MessageBox.Show(
+                if (quiet)
+                {
+                    Console.Error.WriteLine("Falha na instalacao: " + exception.Message);
+                }
+                else MessageBox.Show(
                     "O " + AppName + " nao foi instalado.\n\nDetalhes: " +
                     exception.Message,
                     "Falha na instalacao",

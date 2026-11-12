@@ -216,6 +216,12 @@ function Get-ProcessInventory {
     [CmdletBinding()]
     param([string]$Search = '')
 
+    $logicalProcessors = [Environment]::ProcessorCount
+    try {
+        $computer = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($computer.NumberOfLogicalProcessors -gt 0) { $logicalProcessors = [int]$computer.NumberOfLogicalProcessors }
+    }
+    catch { }
     $perfById = @{}
     try {
         Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -ErrorAction Stop |
@@ -255,8 +261,9 @@ function Get-ProcessInventory {
         $isProtected = ($id -in @(0, 4, $PID)) -or ($protected -contains $process.ProcessName) -or `
             ($sessionId -eq 0) -or (Test-ProtectedProcessMetadata -Name $process.ProcessName `
                 -Description $description -Company $company -Path $path)
-        $cpu = if ($perf) { [double]$perf.PercentProcessorTime } else { 0 }
-        $io = if ($perf) { [double]$perf.IODataBytesPersec } else { 0 }
+        # O contador Process soma todos os nucleos; a UI mostra a fracao do PC.
+        $cpu = if ($perf) { [math]::Round([math]::Max(0, [math]::Min(100, [double]$perf.PercentProcessorTime / $logicalProcessors)), 1) } else { $null }
+        $io = if ($perf) { [math]::Round(([double]$perf.IODataBytesPersec / 1MB), 2) } else { $null }
         $result.Add([pscustomobject]@{
             Id             = $id
             Name           = $process.ProcessName
@@ -264,10 +271,10 @@ function Get-ProcessInventory {
             Company        = $company
             Path           = $path
             CommandLine    = if ($cim) { [string]$cim.CommandLine } else { '' }
-            CpuPercent     = [math]::Round($cpu, 1)
+            CpuPercent     = $cpu
             MemoryMB       = [math]::Round(([double]$process.WorkingSet64 / 1MB), 1)
             PrivateMB      = [math]::Round(([double]$process.PrivateMemorySize64 / 1MB), 1)
-            DiskMBps       = [math]::Round(($io / 1MB), 2)
+            DiskMBps       = $io
             SessionId      = $sessionId
             StartTime      = $startTime
             IsProtected    = $isProtected

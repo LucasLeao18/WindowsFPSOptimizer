@@ -128,7 +128,7 @@ $moduleOrder = @(
     'ServiceManager.psm1', 'StartupManager.psm1', 'PowerOptimizations.psm1',
     'GraphicsOptimizations.psm1', 'StorageOptimizations.psm1', 'WindowsAppsManager.psm1',
     'PrivacyManager.psm1', 'ScheduledTaskManager.psm1', 'GameOptimizations.psm1',
-    'SystemAnalysis.psm1', 'Profiles.psm1', 'UIController.psm1'
+    'SystemAnalysis.psm1', 'Benchmark.psm1', 'Profiles.psm1', 'UIController.psm1'
 )
 foreach ($moduleName in $moduleOrder) {
     $modulePath = Join-Path $script:AppRoot $moduleName
@@ -289,7 +289,7 @@ $workerScript = {
         'ServiceManager.psm1', 'StartupManager.psm1', 'PowerOptimizations.psm1',
         'GraphicsOptimizations.psm1', 'StorageOptimizations.psm1', 'WindowsAppsManager.psm1',
         'PrivacyManager.psm1', 'ScheduledTaskManager.psm1', 'GameOptimizations.psm1',
-        'SystemAnalysis.psm1', 'Profiles.psm1', 'UIController.psm1'
+        'SystemAnalysis.psm1', 'Benchmark.psm1', 'Profiles.psm1', 'UIController.psm1'
     )
     foreach ($module in $modules) { Import-Module (Join-Path $Root $module) -Force -ErrorAction Stop }
     $workerContext = Initialize-OptimizerContext -AppRoot $Root -ConfigPath $ConfigPath `
@@ -300,7 +300,7 @@ $workerScript = {
 
 function Set-UiBusyState {
     param([bool]$Busy, [string]$Message = 'Pronto.')
-    $gameMonitorActive = $Busy -and $script:ActiveTask -and $script:ActiveTask.ActionId -in @('StartGameSession', 'InvokeGameProfile')
+    $gameMonitorActive = $Busy -and $script:ActiveTask -and $script:ActiveTask.IsGameSession
     # Durante o monitoramento do jogo a interface continua operavel. Novas mutacoes
     # sao recusadas pelo dispatcher, mas o usuario ainda pode pedir encerramento.
     (Get-Control 'ContentHost').IsEnabled = (-not $Busy) -or $gameMonitorActive
@@ -399,7 +399,7 @@ function Start-UiAction {
     )
 
     if ($script:ActiveTask) {
-        if ($ActionId -eq 'StopGameSession' -and $script:ActiveTask.ActionId -in @('StartGameSession', 'InvokeGameProfile')) {
+        if ($ActionId -eq 'StopGameSession' -and $script:ActiveTask.IsGameSession) {
             try {
                 [void]$script:ActiveTask.PowerShell.BeginStop($null, $null)
                 (Get-Control 'OperationStatusText').Text = 'Encerramento solicitado; restaurando a sessao...'
@@ -430,6 +430,7 @@ function Start-UiAction {
         $script:ActiveTask = [pscustomobject]@{
             ActionId = $ActionId; PowerShell = $powerShell; Handle = $handle; OnCompleted = $OnCompleted
             Started = Get-Date; Status = $Status; Quiet = [bool]$Quiet
+            IsGameSession = Test-UiGameSessionAction -ActionId $ActionId -Parameters $Parameters
         }
         if (-not $Quiet) { Set-UiBusyState -Busy $true -Message $Status }
     }
@@ -604,6 +605,7 @@ function Update-UiFromResult {
                 (Get-Control 'BtnOpenHags').IsEnabled = ([string]$game.Hags.State -ne 'Unsupported')
                 (Get-Control 'BtnGraphicsHags').IsEnabled = ([string]$game.Hags.State -ne 'Unsupported')
                 (Get-Control 'BtnOpenGraphicsSettings').IsEnabled = ([string]$game.GpuPreference.State -ne 'Unsupported')
+                (Get-Control 'BtnWindowedGames').IsEnabled = ([string]$game.WindowedGames.State -ne 'Unsupported')
                 (Get-Control 'BtnGraphicsPreferences').IsEnabled = ([string]$game.GpuPreference.State -ne 'Unsupported')
                 (Get-Control 'BtnOpenFocus').IsEnabled = ([string]$game.DoNotDisturb.State -ne 'Unsupported')
             }
@@ -615,6 +617,14 @@ function Update-UiFromResult {
                 (Get-Control 'CoolingPolicyCombo').IsEnabled = [bool]$Result.PowerCapabilities.CoolingPolicyAvailable
                 (Get-Control 'CoolingPolicyCombo').ToolTip = if ($Result.PowerCapabilities.CoolingPolicyAvailable) { 'Politica exposta pelo firmware.' } else { 'Politica de resfriamento indisponivel neste hardware/plano.' }
             }
+        }
+        'CompareBenchmarks' {
+            Set-ItemsSource (Get-Control 'BenchmarkGrid') $Result.Metrics
+            (Get-Control 'BenchmarkSummaryText').Text = (
+                "Antes: $($Result.Before.FrameCount) quadros | Depois: $($Result.After.FrameCount) quadros`n" +
+                "$($Result.Before.Path)`n$($Result.After.Path)`n" +
+                (@($Result.Warnings) -join "`n") + "`n" + $Result.Disclaimer
+            )
         }
         'Analyze' {
             Update-HomeOverview $Result.Overview
@@ -763,7 +773,7 @@ $pollTimer.Add_Tick({
             catch { }
 
             if ($script:CancelRequested -or $operationError.Exception -is [Management.Automation.PipelineStoppedException]) {
-                $isGameSession = $task.ActionId -in @('StartGameSession', 'InvokeGameProfile')
+                $isGameSession = [bool]$task.IsGameSession
                 Set-UiBusyState -Busy $false -Message $(if ($isGameSession) {
                     'Sessao interrompida; restauracao solicitada. Verifique o log.'
                 } else { 'Operacao cancelada. Verifique o log para confirmar o rollback.' })
@@ -978,6 +988,20 @@ $modeChanged = {
 
 # Inicio, backup, relatorios e restauracao.
 Add-AsyncButtonHandler 'BtnAnalyze' 'Analyze' $null 'Analisando computador...'
+(Get-Control 'BtnCompareBenchmarks').Add_Click({
+    try {
+        $dialog = New-Object Microsoft.Win32.OpenFileDialog
+        $dialog.Filter = 'CSV do PresentMon (*.csv)|*.csv'
+        $dialog.Title = 'Selecione a captura ANTES da alteracao'
+        if (-not $dialog.ShowDialog($window)) { return }
+        $beforePath = $dialog.FileName
+        $dialog.Title = 'Selecione a captura DEPOIS da alteracao'
+        $dialog.FileName = ''
+        if (-not $dialog.ShowDialog($window)) { return }
+        Start-UiAction -ActionId 'CompareBenchmarks' -Parameters @{ BeforePath = $beforePath; AfterPath = $dialog.FileName } -Status 'Comparando capturas...'
+    }
+    catch { Show-AppMessage -Message $_.Exception.Message -Title 'Comparar capturas' -Icon Error }
+})
 Add-AsyncButtonHandler 'BtnCreateBackup' 'CreateBackup' $null 'Criando backup e checkpoint...' -RequiresAdministrator
 Add-AsyncButtonHandler 'BtnQuickOptimize' 'QuickOptimize' { @{ StartupIds = Get-SelectedStartupIds } } `
     'Aplicando perfil seguro...' -RequiresAdministrator `
@@ -1088,6 +1112,7 @@ Add-OpenSettingsHandler 'BtnOpenCaptures' 'Captures'
 Add-OpenSettingsHandler 'BtnOpenGameBar' 'GameBar'
 Add-OpenSettingsHandler 'BtnOpenHags' 'Hags'
 Add-OpenSettingsHandler 'BtnOpenGraphicsSettings' 'Graphics'
+Add-OpenSettingsHandler 'BtnWindowedGames' 'WindowedGames'
 Add-OpenSettingsHandler 'BtnOpenFocus' 'DoNotDisturbGame'
 Add-OpenSettingsHandler 'BtnOpenNotifications' 'Notifications'
 Add-OpenSettingsHandler 'BtnGraphicsHags' 'Hags'
@@ -1405,10 +1430,13 @@ function Get-ProfileParameters {
         throw 'Selecione o executavel do jogo na aba Otimizacoes de jogos antes de iniciar o perfil maximo FPS.'
     }
     $includeCleanup = [bool](Get-Control 'ProfileIncludeCleanupCheck').IsChecked
+    if ($Name -eq 'MaximumFPS' -and $includeCleanup) {
+        throw 'Desmarque a limpeza para iniciar o perfil temporario. Use a pagina de armazenamento para limpar separadamente.'
+    }
     $confirmedIrreversible = $false
     if ($includeCleanup) {
         $confirmedIrreversible = Confirm-AppAction -Title 'Confirmar limpeza irreversivel' `
-            -Message 'A limpeza removera temporarios e cache de shaders, que nao podem ser restaurados pelo backup. Confirmar separadamente?'
+            -Message 'A limpeza removera somente temporarios antigos do usuario, que nao podem ser restaurados pelo backup. Confirmar separadamente?'
         if (-not $confirmedIrreversible) { throw 'Aplicacao do perfil cancelada: a limpeza irreversivel nao foi confirmada.' }
     }
     return @{
@@ -1521,7 +1549,7 @@ Add-AsyncButtonHandler 'BtnRemoveGame' 'RemoveGame' {
     (Get-Control 'GameProfileNameTextBox').Text = [string](Get-ObjectPropertyValue $row 'Name' '')
     (Get-Control 'GameProfileArgumentsTextBox').Text = [string](Get-ObjectPropertyValue $row 'Arguments' '')
     Set-ComboContent (Get-Control 'GameProfilePriorityCombo') ([string](Get-ObjectPropertyValue $row 'Priority' 'AboveNormal'))
-    Set-ComboContent (Get-Control 'GameProfilePowerCombo') ([string](Get-ObjectPropertyValue $row 'PowerPlan' 'HighPerformance'))
+    Set-ComboContent (Get-Control 'GameProfilePowerCombo') ([string](Get-ObjectPropertyValue $row 'PowerPlan' 'None'))
     (Get-Control 'GameProfilePreventSleepCheck').IsChecked = [bool](Get-ObjectPropertyValue $row 'PreventSleep' $true)
     (Get-Control 'GameProfileReduceVisualCheck').IsChecked = [bool](Get-ObjectPropertyValue $row 'ReduceVisualEffects' $false)
     (Get-Control 'GameProfileDoNotDisturbCheck').IsChecked = [bool](Get-ObjectPropertyValue $row 'OpenDoNotDisturbSettings' $false)
@@ -1682,7 +1710,7 @@ $window.Add_Closing({
         (Get-Control 'OperationStatusText').Text = 'Aguardando cancelamento e restauracao...'
         return
     }
-    $isGameSession = $script:ActiveTask.ActionId -in @('StartGameSession', 'InvokeGameProfile')
+    $isGameSession = [bool]$script:ActiveTask.IsGameSession
     $message = if ($isGameSession) {
         'Encerrar a sessao, restaurar os recursos e manter a janela aberta ate concluir?'
     } else { 'Cancelar a operacao atual? A janela permanecera aberta ate o rollback terminar.' }

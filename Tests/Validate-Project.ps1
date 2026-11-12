@@ -31,7 +31,7 @@ $requiredFiles = @(
     'StorageOptimizations.psm1', 'ServiceManager.psm1', 'StartupManager.psm1',
     'BackupManager.psm1', 'ProcessManager.psm1', 'Logging.psm1', 'Profiles.psm1',
     'WindowsAppsManager.psm1', 'PrivacyManager.psm1', 'ScheduledTaskManager.psm1',
-    'UIController.psm1', 'Config.json', 'README.md'
+    'UIController.psm1', 'Benchmark.psm1', 'Config.json', 'README.md'
 )
 foreach ($relativePath in $requiredFiles) {
     $path = Join-Path $projectRoot $relativePath
@@ -135,7 +135,7 @@ $moduleOrder = @(
     'ServiceManager.psm1', 'StartupManager.psm1', 'PowerOptimizations.psm1',
     'GraphicsOptimizations.psm1', 'StorageOptimizations.psm1', 'WindowsAppsManager.psm1',
     'PrivacyManager.psm1', 'ScheduledTaskManager.psm1', 'GameOptimizations.psm1',
-    'SystemAnalysis.psm1', 'Profiles.psm1', 'UIController.psm1'
+    'SystemAnalysis.psm1', 'Benchmark.psm1', 'Profiles.psm1', 'UIController.psm1'
 )
 try {
     foreach ($module in $moduleOrder) {
@@ -152,7 +152,7 @@ $requiredCommands = @(
     'Set-HighPerformancePlan', 'Get-PowerCapabilities', 'Get-HagsState',
     'Invoke-SafeCleanup', 'Get-OptionalServices', 'Get-StartupItems', 'Get-ProcessInventory',
     'Get-AllServiceInventory', 'Get-InstalledApplications', 'Get-PrivacyOptimizationState', 'Get-ScheduledTaskInventory',
-    'Invoke-OptimizationProfile', 'Invoke-UIAction'
+    'Invoke-OptimizationProfile', 'Invoke-UIAction', 'Import-FrameTimeCapture', 'Compare-FrameTimeCapture'
 )
 foreach ($command in $requiredCommands) {
     Add-CheckResult -Name "Contrato $command" -Passed ($null -ne (Get-Command $command -ErrorAction SilentlyContinue)) `

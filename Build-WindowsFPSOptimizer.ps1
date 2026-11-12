@@ -406,12 +406,14 @@ $setupLauncherSourcePath = Join-Path $projectRoot 'Installer\SetupLauncher.cs'
 $setupManifestPath = Join-Path $projectRoot 'Installer\SetupLauncher.manifest'
 $validationScriptPath = Join-Path $projectRoot 'Tests\Validate-Project.ps1'
 $asyncUiTestPath = Join-Path $projectRoot 'Tests\Test-AsyncUiRunspace.ps1'
+$performanceTestPath = Join-Path $projectRoot 'Tests\Test-PerformanceImprovements.ps1'
 $runtimeFiles = @(
     'WindowsFPSOptimizer.ps1',
     'MainWindow.xaml',
     'Config.json',
     'Core.psm1',
     'SystemAnalysis.psm1',
+    'Benchmark.psm1',
     'GameOptimizations.psm1',
     'PowerOptimizations.psm1',
     'GraphicsOptimizations.psm1',
@@ -461,7 +463,8 @@ $buildInputPaths = @(
     $setupLauncherSourcePath,
     $setupManifestPath,
     $validationScriptPath,
-    $asyncUiTestPath
+    $asyncUiTestPath,
+    $performanceTestPath
 ) + @($runtimeFiles | ForEach-Object { Join-Path $projectRoot $_ })
 $buildInputFingerprints = @{}
 foreach ($inputPath in $buildInputPaths) {
@@ -532,6 +535,14 @@ if (-not $SkipValidation) {
 
     if ($LASTEXITCODE -ne 0) {
         throw "O teste assincrono da interface falhou com o codigo $LASTEXITCODE."
+    }
+    if (-not (Test-Path -LiteralPath $performanceTestPath -PathType Leaf)) {
+        throw 'O teste Tests\Test-PerformanceImprovements.ps1 nao foi encontrado.'
+    }
+    Write-Host 'Testando perfis, telemetria e comparacao de capturas...'
+    & $nativePowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $performanceTestPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "O teste de desempenho falhou com o codigo $LASTEXITCODE."
     }
 }
 
@@ -715,7 +726,7 @@ if ((Get-PeMachine -Path $innerExePath) -ne 0x014C) {
 }
 
 # Execute o proprio pacote em modo de validacao: isso comprova que o comando
-# interno, o CMD, o PowerShell 5.1 e os 22 hashes do manifesto funcionam juntos.
+# interno, o CMD, o PowerShell 5.1 e os hashes do manifesto funcionam juntos.
 $innerValidationDirectory = Assert-ChildPath -ParentPath $buildRoot -ChildPath (
     Join-Path $buildRoot 'InnerValidation'
 )
@@ -741,6 +752,7 @@ try {
     $innerValidationProcess = Start-Process `
         -FilePath $innerExePath `
         -WorkingDirectory $innerValidationDirectory `
+        -WindowStyle Hidden `
         -Wait `
         -PassThru `
         -ErrorAction Stop

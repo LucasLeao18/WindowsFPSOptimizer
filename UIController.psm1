@@ -2,6 +2,13 @@
 
 Set-StrictMode -Version Latest
 
+function Test-UiGameSessionAction {
+    [CmdletBinding()]
+    param([string]$ActionId, [hashtable]$Parameters = @{})
+    return ($ActionId -in @('StartGameSession', 'InvokeGameProfile') -or
+        ($ActionId -eq 'ApplyProfile' -and $Parameters.ContainsKey('Name') -and $Parameters.Name -eq 'MaximumFPS'))
+}
+
 function Get-RequiredUiParameter {
     param([hashtable]$Parameters, [string]$Name)
     if (-not $Parameters.ContainsKey($Name)) { throw "Parametro obrigatorio ausente: $Name" }
@@ -144,6 +151,11 @@ function Invoke-UIAction {
     switch ($ActionId) {
         'InitialData' { return Get-UiInitialData }
         'Analyze' { return Invoke-ComputerAnalysis }
+        'CompareBenchmarks' {
+            $before = Import-FrameTimeCapture -Path ([string](Get-RequiredUiParameter $Parameters 'BeforePath'))
+            $after = Import-FrameTimeCapture -Path ([string](Get-RequiredUiParameter $Parameters 'AfterPath'))
+            return Compare-FrameTimeCapture -Before $before -After $after
+        }
         'Metrics' { return Get-LivePerformanceMetrics }
         'Memory' {
             return [pscustomobject]@{ Memory = Get-MemoryStatus; Top = @(Get-TopMemoryApplications -Top 25); PageFile = Get-PageFileConfiguration }
@@ -376,4 +388,4 @@ function Invoke-UIAction {
     }
 }
 
-Export-ModuleMember -Function Invoke-UIAction, Get-UiInitialData, Restore-LatestOptimizerResource
+Export-ModuleMember -Function Invoke-UIAction, Get-UiInitialData, Restore-LatestOptimizerResource, Test-UiGameSessionAction
