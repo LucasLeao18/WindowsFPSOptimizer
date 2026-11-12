@@ -47,6 +47,7 @@ try {
     Assert-Experience (Test-UiGameSessionAction SimpleOptimize @{ Preset = 'MaximumFPS' }) 'Maximo FPS simples precisa manter controles de encerramento.'
     $main = Get-Content (Join-Path $root 'WindowsFPSOptimizer.ps1') -Raw -Encoding UTF8
     Assert-Experience ($main -match 'OnboardingCompleted -and -not \$ResumeAction') 'O onboarding nao deve interromper a retomada apos UAC.'
+    Assert-Experience ($main -match "ResumeAction -eq 'SimpleOptimize'" -and $main -match 'Get-Control \$presetControl') 'A retomada apos UAC deve restaurar o preset selecionado na tela.'
     Assert-Experience ($main -match 'SimpleOptimize -Parameters \$parameters' -and $main -match 'Confirm-AppAction -Title') 'Aplicacao simples deve continuar exigindo confirmacao.'
     $appSource = Get-Content (Join-Path $root 'Installer\AppLauncher.cs') -Raw
     Assert-Experience ($appSource -match 'RunspaceFactory\.CreateRunspace' -and $appSource -notmatch 'Process\.Start\(|powershell\.exe\b') 'O aplicativo deve hospedar o motor sem processo de console.'

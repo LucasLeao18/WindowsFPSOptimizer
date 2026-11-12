@@ -1859,6 +1859,18 @@ $window.Add_ContentRendered({
                     $decoded = $json | ConvertFrom-Json -ErrorAction Stop
                     $parameters = @{}
                     foreach ($property in $decoded.PSObject.Properties) { $parameters[$property.Name] = $property.Value }
+                    if ($ResumeAction -eq 'SimpleOptimize' -and $parameters.ContainsKey('Preset')) {
+                        $presetControl = switch ([string]$parameters.Preset) {
+                            'Safe' { 'SimpleSafePreset' }
+                            'Balanced' { 'SimpleBalancedPreset' }
+                            'MaximumFPS' { 'SimpleMaximumPreset' }
+                            default { throw 'Preset simplificado inválido na retomada.' }
+                        }
+                        (Get-Control $presetControl).IsChecked = $true
+                        if ($parameters.ContainsKey('GameExecutable')) {
+                            (Get-Control 'SimpleGamePathText').Text = [string]$parameters.GameExecutable
+                        }
+                    }
                     Start-UiAction -ActionId $ResumeAction -Parameters $parameters `
                         -Status 'Retomando operacao apos elevacao...' -RequiresAdministrator
                 }
