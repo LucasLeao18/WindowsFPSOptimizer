@@ -183,7 +183,7 @@ function Invoke-UIAction {
             if ($preset -notin @('Safe', 'Balanced', 'MaximumFPS')) { throw 'Preset simplificado invalido.' }
             if ($preset -ne 'Safe' -and -not (Get-OptimizerContext).Simulation -and -not [bool]$Parameters.Confirmed) { throw 'Confirme o preset antes de aplicar.' }
             $executable = if ($Parameters.ContainsKey('GameExecutable')) { [string]$Parameters.GameExecutable } else { '' }
-            $changes = @(Invoke-OptimizationProfile -Name $preset -Confirmed -GameExecutable $executable)
+            $changes = @(Invoke-OptimizationProfile -Name $preset -Confirmed -GameExecutable $executable -UseConfiguredProcessList $false)
             return [pscustomobject]@{
                 Result = if ((Get-OptimizerContext).Simulation) { 'Simulated' } else { 'Completed' }
                 Preset = $preset; Changes = $changes

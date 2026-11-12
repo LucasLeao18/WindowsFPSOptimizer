@@ -32,9 +32,9 @@ try {
     $probe = & (Get-Module UIController) {
         $script:selectionCount = -1
         function Invoke-OptimizationProfile {
-            param($Name, [switch]$Confirmed, $GameExecutable, [string[]]$SelectedStartupIds = @())
+            param($Name, [switch]$Confirmed, $GameExecutable, [string[]]$SelectedStartupIds = @(), [bool]$UseConfiguredProcessList = $true)
             $script:selectionCount = $SelectedStartupIds.Count
-            [pscustomobject]@{ Result = 'Simulated'; Name = $Name }
+            [pscustomobject]@{ Result = 'Simulated'; Name = $Name; UseConfiguredProcesses = $UseConfiguredProcessList }
         }
         $result = Invoke-UIAction SimpleOptimize
         $balanced = Invoke-UIAction SimpleOptimize @{ Preset = 'Balanced' }
@@ -43,6 +43,7 @@ try {
     }
     Assert-Experience ($probe.Selections -eq 0 -and $probe.Result.Result -eq 'Simulated') 'O padrao simples nao deve herdar selecoes avancadas nem aplicar em simulacao.'
     Assert-Experience ($probe.Balanced.Changes[0].Name -eq 'Balanced' -and $probe.Maximum.Changes[0].Name -eq 'MaximumFPS') 'Os tres presets devem chegar ao motor correto.'
+    Assert-Experience (-not $probe.Maximum.Changes[0].UseConfiguredProcesses) 'Maximo FPS simples nao pode fechar processos de listas avancadas.'
     Assert-Experience (Test-UiGameSessionAction SimpleOptimize @{ Preset = 'MaximumFPS' }) 'Maximo FPS simples precisa manter controles de encerramento.'
     $main = Get-Content (Join-Path $root 'WindowsFPSOptimizer.ps1') -Raw -Encoding UTF8
     Assert-Experience ($main -match 'OnboardingCompleted -and -not \$ResumeAction') 'O onboarding nao deve interromper a retomada apos UAC.'

@@ -120,7 +120,8 @@ function Invoke-OptimizationProfile {
         [switch]$IncludeCleanup,
         [switch]$Confirmed,
         [switch]$ConfirmedIrreversible,
-        [string]$GameExecutable
+        [string]$GameExecutable,
+        [bool]$UseConfiguredProcessList = $true
     )
 
     if ($Name -ne 'Safe' -and -not $Confirmed) { throw 'O perfil selecionado exige confirmacao explicita.' }
@@ -144,7 +145,7 @@ function Invoke-OptimizationProfile {
             # antes da sessao que promete restaurar os recursos alterados.
             $sessionResult = Invoke-TransientGameProfile -ExecutablePath $GameExecutable -Priority AboveNormal `
                 -SuspendServices $SelectedServices -PowerPlan HighPerformance -PreventSleep $true `
-                -ReduceVisualEffects $true -UseConfiguredProcessList $true
+                -ReduceVisualEffects $true -UseConfiguredProcessList $UseConfiguredProcessList
             return [pscustomobject]@{ ProfileResults = @(); GameSession = $sessionResult }
         }
         $profileResults = Invoke-OptimizerOperation -Name "Aplicar perfil $Name" `
