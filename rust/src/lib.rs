@@ -111,3 +111,6 @@ mod tests {
         }
     }
 }
+pub mod power_session;
+#[cfg(windows)]
+pub mod windows_power;

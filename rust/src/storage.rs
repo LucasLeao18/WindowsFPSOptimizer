@@ -1,5 +1,6 @@
 //! Durable journal with a process-wide lock and exclusive creation.
 use crate::{
+    power_session::{Journal as PowerJournal, Store as PowerStore},
     session::{SessionJournal, SessionStore},
     transaction::{Journal, Store},
 };
@@ -14,6 +15,7 @@ const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 pub struct FileStore {
     file: PathBuf,
     session_file: PathBuf,
+    power_file: PathBuf,
     _lock: File,
 }
 
@@ -33,6 +35,7 @@ impl FileStore {
         Ok(Self {
             file: directory.join("active.json"),
             session_file: directory.join("session.json"),
+            power_file: directory.join("power-session.json"),
             _lock: lock,
         })
     }
@@ -41,6 +44,23 @@ impl FileStore {
     /// This never changes a process or a Windows setting.
     pub fn archive_session(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.session_file, "session", 65_536)
+    }
+    pub fn archive_power(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.power_file, "power-session", 65_536)
+    }
+    /// Archive raw records even if damaged, so recovery is not blocked by parsing.
+    pub fn archive_session_records(&mut self) -> Result<Vec<PathBuf>, String> {
+        let mut paths = Vec::new();
+        if self.power_file.try_exists().map_err(|e| e.to_string())? {
+            paths.push(self.archive_power()?);
+        }
+        if self.session_file.try_exists().map_err(|e| e.to_string())? {
+            paths.push(self.archive_session()?);
+        }
+        if paths.is_empty() {
+            return Err("Não há registros de sessão para arquivar.".into());
+        }
+        Ok(paths)
     }
     pub fn archive_backup(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.file, "backup", MAX_JOURNAL_BYTES)
@@ -80,6 +100,65 @@ impl FileStore {
             serde_json::from_slice(&bytes).map_err(|e| format!("Backup inválido: {e}"))?;
         crate::transaction::validate(&journal)?;
         Store::save(self, &journal)
+    }
+}
+
+impl PowerStore for FileStore {
+    fn load_power(&mut self) -> Result<Option<PowerJournal>, String> {
+        let file = match File::open(&self.power_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o registro de energia: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("Registro de energia excede o tamanho permitido.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Registro de energia inválido: {e}"))
+    }
+    fn save_power(&mut self, journal: &PowerJournal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.power_file)
+            .map_err(|e| format!("Não foi possível criar o registro de energia: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.power_file);
+            return Err(format!(
+                "Não foi possível salvar o registro de energia: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update_power(&mut self, old: &PowerJournal, new: &PowerJournal) -> Result<(), String> {
+        if self.load_power()?.as_ref() != Some(old) {
+            return Err("O registro de energia mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("Registro de energia excede o tamanho permitido.".into());
+        }
+        replace_record(&self.power_file, &bytes)
+    }
+    fn clear_power(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.power_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o registro de energia: {error}"
+            )),
+        }
     }
 }
 
@@ -355,6 +434,50 @@ mod tests {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
             assert_eq!(store.load_session().unwrap(), Some(value));
             store.clear_session().unwrap();
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn power_journal_survives_reopening_and_corruption_can_be_archived() {
+        use crate::power_session::{
+            HIGH_PERFORMANCE, Journal as PowerJournal, Phase as PowerPhase, Scheme,
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("power-store-{unique}"));
+        let mut record = PowerJournal {
+            schema: 1,
+            process: ProcessIdentity { pid: 1, created: 2 },
+            original: Scheme {
+                data1: 1,
+                data2: 2,
+                data3: 3,
+                data4: [4; 8],
+            },
+            applied: HIGH_PERFORMANCE,
+            phase: PowerPhase::Pending,
+        };
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            store.save_power(&record).unwrap();
+            let mut armed = record.clone();
+            armed.phase = PowerPhase::Armed;
+            store.update_power(&record, &armed).unwrap();
+            assert!(store.update_power(&record, &armed).is_err());
+            record = armed;
+        }
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            assert_eq!(store.load_power().unwrap(), Some(record));
+            fs::write(directory.join("power-session.json"), b"broken").unwrap();
+            assert!(store.load_power().is_err());
+            let paths = store.archive_session_records().unwrap();
+            assert_eq!(fs::read(&paths[0]).unwrap(), b"broken");
+            assert!(store.load_power().unwrap().is_none());
         }
         fs::remove_dir_all(directory).unwrap();
     }

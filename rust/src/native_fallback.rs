@@ -6,6 +6,7 @@ use std::{
     ptr,
     sync::{OnceLock, mpsc},
     thread,
+    time::{Duration, Instant},
 };
 use windows_fps_optimizer::{Preset, engine::Preview};
 use windows_sys::Win32::{
@@ -119,6 +120,7 @@ enum Finished {
     Preview(Result<Preview, String>),
     Applied(Result<(), String>),
     Message(Result<String, String>),
+    SessionCheck(Result<app::SessionCheck, String>),
 }
 fn start(work: impl FnOnce() -> Finished + Send + 'static) -> mpsc::Receiver<Finished> {
     let (tx, rx) = mpsc::channel();
@@ -234,7 +236,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
         child(
             window,
             "BUTTON",
-            "Restaurar prioridade do jogo",
+            "Restaurar sessão",
             WS_TABSTOP,
             [220, 92, 230, 30],
             END_SESSION,
@@ -302,6 +304,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
     let mut preview: Option<Preview> = None;
     let mut pending: Option<mpsc::Receiver<Finished>> = None;
     let mut ticks = 0u8;
+    let mut next_session_check = Instant::now();
     let mut msg = MSG::default();
     loop {
         let received = unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) };
@@ -327,6 +330,14 @@ pub fn run(smoke: bool) -> Result<(), String> {
                     PostMessageW(window, WM_CLOSE, 0, 0);
                 }
             }
+        }
+        if !smoke
+            && msg.message == WM_TIMER
+            && pending.is_none()
+            && Instant::now() >= next_session_check
+        {
+            next_session_check = Instant::now() + Duration::from_secs(5);
+            pending = Some(start(|| Finished::SessionCheck(app::check_session())));
         }
         while let Ok((id, notification)) = event_rx.try_recv() {
             if id as usize == COMBO && notification as u32 == CBN_SELCHANGE {
@@ -359,7 +370,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 ANALYZE => match selected(combo) {
                     Some(Preset::MaximumFps) => set_text(
                         output,
-                        "Máximo FPS inicia o jogo selecionado, tenta ajustar a prioridade e impedir a suspensão automática enquanto o aplicativo e o jogo estiverem abertos. Selecione o executável e confirme em Aplicar / iniciar.",
+                        "Máximo FPS tenta ajustar a prioridade, usar o plano Alto Desempenho existente e impedir a suspensão. O plano pode aumentar consumo e temperatura. Selecione o jogo e confirme em Aplicar / iniciar.",
                     ),
                     Some(preset) => {
                         preview = None;
@@ -375,7 +386,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                         if let Some(path) = game.clone() {
                             if confirm(
                                 window,
-                                "Iniciar o jogo e tentar ajustar sua prioridade e impedir a suspensão automática? O valor anterior da prioridade será salvo; a tela ainda poderá apagar.",
+                                "Iniciar o jogo e tentar ajustar sua prioridade, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Reabra o aplicativo para restaurar o plano se ele for fechado antes do jogo.",
                             ) {
                                 set_text(output, "Iniciando o jogo...");
                                 pending = Some(start(move || {
@@ -410,7 +421,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                     pending = Some(start(|| Finished::Message(app::restore_system())));
                 }
                 END_SESSION => {
-                    set_text(output, "Restaurando prioridade...");
+                    set_text(output, "Restaurando sessão...");
                     pending = Some(start(|| Finished::Message(app::stop_session())));
                 }
                 ARCHIVE_BACKUP => {
@@ -436,7 +447,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 ARCHIVE_SESSION
                     if confirm(
                         window,
-                        "Manter a prioridade atual e arquivar o registro da sessão? Ela não será restaurada automaticamente.",
+                        "Manter o plano de energia e a prioridade atuais e arquivar os registros? Eles não serão restaurados automaticamente.",
                     ) =>
                 {
                     set_text(output, "Arquivando sessão...");
@@ -485,6 +496,15 @@ pub fn run(smoke: bool) -> Result<(), String> {
                             preview = None;
                             set_text(output, &message);
                         }
+                        Finished::SessionCheck(Ok(app::SessionCheck::Finished)) => set_text(
+                            output,
+                            "O jogo terminou; os registros da sessão foram restaurados ou finalizados.",
+                        ),
+                        Finished::SessionCheck(Ok(_)) => {}
+                        Finished::SessionCheck(Err(error)) => set_text(
+                            output,
+                            &format!("Não foi possível verificar a sessão: {error}"),
+                        ),
                         Finished::Preview(Err(error))
                         | Finished::Applied(Err(error))
                         | Finished::Message(Err(error)) => set_text(output, &error),
