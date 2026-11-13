@@ -117,6 +117,32 @@ fn archive_record(source: &std::path::Path, prefix: &str, limit: usize) -> Resul
     Ok(destination)
 }
 
+fn replace_record(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let temp = path.with_file_name(format!("journal-{}-{stamp}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| format!("Não foi possível atualizar o registro: {e}"))?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temp);
+        return Err(format!("Não foi possível atualizar o registro: {error}"));
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(format!(
+            "Não foi possível concluir a atualização do registro: {error}"
+        ));
+    }
+    Ok(())
+}
+
 impl SessionStore for FileStore {
     fn load_session(&mut self) -> Result<Option<SessionJournal>, String> {
         let file = match File::open(&self.session_file) {
@@ -150,6 +176,16 @@ impl SessionStore for FileStore {
             ));
         }
         Ok(())
+    }
+    fn update_session(&mut self, old: &SessionJournal, new: &SessionJournal) -> Result<(), String> {
+        if self.load_session()?.as_ref() != Some(old) {
+            return Err("O registro da sessão mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("Registro da sessão excede o tamanho permitido.".into());
+        }
+        replace_record(&self.session_file, &bytes)
     }
     fn clear_session(&mut self) -> Result<(), String> {
         match fs::remove_file(&self.session_file) {
@@ -201,6 +237,16 @@ impl Store for FileStore {
         }
         Ok(())
     }
+    fn update(&mut self, old: &Journal, new: &Journal) -> Result<(), String> {
+        if self.load()?.as_ref() != Some(old) {
+            return Err("O backup mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("Backup excede o tamanho permitido.".into());
+        }
+        replace_record(&self.file, &bytes)
+    }
     fn clear(&mut self) -> Result<(), String> {
         match fs::remove_file(&self.file) {
             Ok(()) => Ok(()),
@@ -213,8 +259,10 @@ impl Store for FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Priority, ProcessIdentity, SessionJournal, SessionStore};
-    use crate::transaction::{Entry, Setting, Value};
+    use crate::session::{
+        Phase as SessionPhase, Priority, ProcessIdentity, SessionJournal, SessionStore,
+    };
+    use crate::transaction::{Entry, Phase, Setting, Value};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -232,6 +280,7 @@ mod tests {
                 setting: Setting::GameMode,
                 original: None,
                 applied: Value::dword(1),
+                phase: Phase::Pending,
             }],
         };
         {
@@ -240,6 +289,11 @@ mod tests {
             assert!(store.load().unwrap().is_none());
             store.save(&journal).unwrap();
             assert!(store.save(&journal).is_err());
+            let mut armed = journal.clone();
+            armed.entries[0].phase = Phase::Armed;
+            store.update(&journal, &armed).unwrap();
+            assert!(store.update(&journal, &armed).is_err());
+            store.update(&armed, &journal).unwrap();
         }
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
@@ -268,6 +322,7 @@ mod tests {
                     bytes: vec![255; 1_100_000],
                 }),
                 applied: Value::dword(1),
+                phase: Phase::Pending,
             }],
         };
         assert!(store.save(&journal).is_err());
@@ -289,6 +344,7 @@ mod tests {
             process: ProcessIdentity { pid: 1, created: 2 },
             original: Priority::Normal,
             applied: Priority::AboveNormal,
+            phase: SessionPhase::Pending,
         };
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
@@ -316,6 +372,7 @@ mod tests {
             process: ProcessIdentity { pid: 1, created: 2 },
             original: Priority::Normal,
             applied: Priority::AboveNormal,
+            phase: SessionPhase::Pending,
         };
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
@@ -343,6 +400,7 @@ mod tests {
                 setting: Setting::GameMode,
                 original: None,
                 applied: Value::dword(1),
+                phase: Phase::Applied,
             }],
         };
         {
@@ -377,6 +435,7 @@ mod tests {
                 setting: Setting::GameMode,
                 original: None,
                 applied: Value::dword(0),
+                phase: Phase::Applied,
             }],
         };
         fs::write(&tampered, serde_json::to_vec(&journal).unwrap()).unwrap();

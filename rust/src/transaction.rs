@@ -32,6 +32,20 @@ pub struct Entry {
     pub setting: Setting,
     pub original: Option<Value>,
     pub applied: Value,
+    #[serde(default)]
+    pub phase: Phase,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Phase {
+    /// Older backups have no phase; ownership of a value is ambiguous.
+    #[default]
+    Uncertain,
+    Pending,
+    Armed,
+    Applied,
+    Reverting,
+    Done,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -49,6 +63,7 @@ pub trait Backend {
 pub trait Store {
     fn load(&mut self) -> Result<Option<Journal>, String>;
     fn save(&mut self, journal: &Journal) -> Result<(), String>;
+    fn update(&mut self, old: &Journal, new: &Journal) -> Result<(), String>;
     fn clear(&mut self) -> Result<(), String>;
 }
 
@@ -76,6 +91,7 @@ pub fn prepare<B: Backend>(
                 setting: *setting,
                 original,
                 applied: applied.clone(),
+                phase: Phase::Pending,
             });
         }
     }
@@ -89,6 +105,13 @@ pub fn apply<B: Backend, S: Store>(
     journal: &Journal,
 ) -> Result<(), String> {
     validate(journal)?;
+    if journal
+        .entries
+        .iter()
+        .any(|entry| entry.phase != Phase::Pending)
+    {
+        return Err("O plano de alterações é inválido ou já foi usado.".into());
+    }
     if store.load()?.is_some() {
         return Err("Existe uma operação anterior para revisar ou restaurar.".into());
     }
@@ -105,34 +128,44 @@ pub fn apply<B: Backend, S: Store>(
         }
     }
     store.save(journal)?;
-    for entry in &journal.entries {
+    let mut current_journal = journal.clone();
+    for index in 0..current_journal.entries.len() {
+        let entry = current_journal.entries[index].clone();
         // Another program can change a setting after the initial preflight.
         // Recheck as close to the write as possible and preserve conflicts.
         match backend.read(entry.setting) {
             Ok(current) if current == entry.original => {}
             result => {
-                let rollback = restore(backend, store, journal);
+                let rollback = restore(backend, store, &current_journal);
                 return Err(format!(
                     "A configuração {:?} mudou ou não pôde ser lida antes da gravação: {result:?}. Restauração: {rollback:?}",
                     entry.setting
                 ));
             }
         }
+        let mut armed = current_journal.clone();
+        armed.entries[index].phase = Phase::Armed;
+        store.update(&current_journal, &armed)?;
+        current_journal = armed;
         if let Err(err) = backend.write(entry.setting, &entry.applied) {
             // Keep the journal even if rollback fails or is interrupted.
-            let rollback = restore(backend, store, journal);
+            let rollback = restore(backend, store, &current_journal);
             return Err(format!(
                 "Falha ao aplicar {:?}: {err}. Restauração: {rollback:?}",
                 entry.setting
             ));
         }
         if !matches!(backend.read(entry.setting), Ok(Some(value)) if value == entry.applied) {
-            let rollback = restore(backend, store, journal);
+            let rollback = restore(backend, store, &current_journal);
             return Err(format!(
                 "Não foi possível confirmar {:?}. Restauração: {rollback:?}",
                 entry.setting
             ));
         }
+        let mut applied = current_journal.clone();
+        applied.entries[index].phase = Phase::Applied;
+        store.update(&current_journal, &applied)?;
+        current_journal = applied;
     }
     Ok(())
 }
@@ -152,7 +185,12 @@ pub fn restore<B: Backend, S: Store>(
         conflicts: vec![],
         errors: vec![],
     };
-    for entry in journal.entries.iter().rev() {
+    let mut current_journal = journal.clone();
+    for index in (0..current_journal.entries.len()).rev() {
+        let entry = current_journal.entries[index].clone();
+        if entry.phase == Phase::Done {
+            continue;
+        }
         let current = match backend.read(entry.setting) {
             Ok(value) => value,
             Err(err) => {
@@ -161,16 +199,30 @@ pub fn restore<B: Backend, S: Store>(
             }
         };
         if current == entry.original {
+            let mut done = current_journal.clone();
+            done.entries[index].phase = Phase::Done;
+            store.update(&current_journal, &done)?;
+            current_journal = done;
             report.already_original.push(entry.setting);
-        } else if current != Some(entry.applied.clone()) {
+        } else if entry.phase != Phase::Applied || current != Some(entry.applied.clone()) {
             report.conflicts.push(entry.setting);
         } else {
+            let mut reverting = current_journal.clone();
+            reverting.entries[index].phase = Phase::Reverting;
+            store.update(&current_journal, &reverting)?;
+            current_journal = reverting;
             let result = match &entry.original {
                 Some(value) => backend.write(entry.setting, value),
                 None => backend.delete(entry.setting),
             };
             match result.and_then(|_| backend.read(entry.setting)) {
-                Ok(value) if value == entry.original => report.restored.push(entry.setting),
+                Ok(value) if value == entry.original => {
+                    let mut done = current_journal.clone();
+                    done.entries[index].phase = Phase::Done;
+                    store.update(&current_journal, &done)?;
+                    current_journal = done;
+                    report.restored.push(entry.setting);
+                }
                 Ok(_) => report
                     .errors
                     .push((entry.setting, "Verificação da restauração falhou.".into())),
@@ -244,6 +296,13 @@ mod tests {
             self.0 = Some(j.clone());
             Ok(())
         }
+        fn update(&mut self, old: &Journal, new: &Journal) -> Result<(), String> {
+            if self.0.as_ref() != Some(old) {
+                return Err("journal changed".into());
+            }
+            self.0 = Some(new.clone());
+            Ok(())
+        }
         fn clear(&mut self) -> Result<(), String> {
             self.0 = None;
             Ok(())
@@ -267,7 +326,8 @@ mod tests {
         .unwrap();
         let mut store = Memory::default();
         apply(&mut backend, &mut store, &plan).unwrap();
-        let report = restore(&mut backend, &mut store, &plan).unwrap();
+        let saved = store.load().unwrap().unwrap();
+        let report = restore(&mut backend, &mut store, &saved).unwrap();
         assert_eq!(report.restored.len(), 2);
         assert_eq!(backend.values.get(&Setting::GameMode), Some(&unusual));
         assert!(!backend.values.contains_key(&Setting::Transparency));
@@ -280,10 +340,51 @@ mod tests {
         let mut store = Memory::default();
         apply(&mut backend, &mut store, &plan).unwrap();
         backend.values.insert(Setting::GameMode, Value::dword(2));
-        let result = restore(&mut backend, &mut store, &plan).unwrap();
+        let saved = store.load().unwrap().unwrap();
+        let result = restore(&mut backend, &mut store, &saved).unwrap();
         assert_eq!(result.conflicts, vec![Setting::GameMode]);
         assert_eq!(backend.values[&Setting::GameMode], Value::dword(2));
         assert!(store.0.is_some());
+    }
+    #[test]
+    fn retry_does_not_undo_changes_after_partial_restoration() {
+        let mut backend = Fake::default();
+        let plan = prepare(
+            &mut backend,
+            &[
+                (Setting::GameMode, Value::dword(1)),
+                (Setting::Transparency, Value::dword(0)),
+            ],
+        )
+        .unwrap();
+        let mut store = Memory::default();
+        apply(&mut backend, &mut store, &plan).unwrap();
+        backend
+            .values
+            .insert(Setting::Transparency, Value::dword(7));
+        let saved = store.load().unwrap().unwrap();
+        let report = restore(&mut backend, &mut store, &saved).unwrap();
+        assert_eq!(report.restored, vec![Setting::GameMode]);
+        assert_eq!(report.conflicts, vec![Setting::Transparency]);
+        backend.values.insert(Setting::GameMode, Value::dword(1));
+        let saved = store.load().unwrap().unwrap();
+        restore(&mut backend, &mut store, &saved).unwrap();
+        assert_eq!(
+            backend.values.get(&Setting::GameMode),
+            Some(&Value::dword(1))
+        );
+    }
+    #[test]
+    fn interrupted_restoration_preserves_an_ambiguous_value() {
+        let mut backend = Fake::default();
+        let mut plan = prepare(&mut backend, &[(Setting::GameMode, Value::dword(1))]).unwrap();
+        plan.entries[0].phase = Phase::Reverting;
+        backend.values.insert(Setting::GameMode, Value::dword(1));
+        let mut store = Memory(Some(plan.clone()));
+        assert_eq!(
+            restore(&mut backend, &mut store, &plan).unwrap().conflicts,
+            vec![Setting::GameMode]
+        );
     }
     #[test]
     fn detects_stale_preview_before_any_write() {
@@ -307,7 +408,7 @@ mod tests {
                     self.reads += 1;
                     // prepare, preflight, then immediately before the second write
                     if self.reads == 3 {
-                        self.inner.values.insert(setting, Value::dword(7));
+                        self.inner.values.insert(setting, Value::dword(0));
                     }
                 }
                 self.inner.read(setting)
@@ -335,7 +436,7 @@ mod tests {
         assert!(apply(&mut backend, &mut store, &plan).is_err());
         assert_eq!(
             backend.inner.values.get(&Setting::Transparency),
-            Some(&Value::dword(7))
+            Some(&Value::dword(0))
         );
         assert!(!backend.inner.values.contains_key(&Setting::GameMode));
         assert!(store.0.is_some());
@@ -367,16 +468,39 @@ mod tests {
         assert_eq!(backend.values[&Setting::GameMode], Value::dword(1));
     }
     #[test]
-    fn recovery_handles_a_crash_after_the_write() {
+    fn uncertain_crash_preserves_a_value_that_may_be_external() {
         let mut backend = Fake::default();
         let plan = prepare(&mut backend, &[(Setting::GameMode, Value::dword(1))]).unwrap();
-        let mut store = Memory(Some(plan.clone()));
+        let mut uncertain = plan.clone();
+        uncertain.entries[0].phase = Phase::Armed;
+        let mut store = Memory(Some(uncertain.clone()));
         backend.write(Setting::GameMode, &Value::dword(1)).unwrap();
         assert_eq!(
-            restore(&mut backend, &mut store, &plan).unwrap().restored,
+            restore(&mut backend, &mut store, &uncertain)
+                .unwrap()
+                .conflicts,
             vec![Setting::GameMode]
         );
-        assert!(store.0.is_none());
+        assert!(store.0.is_some());
+        assert_eq!(
+            backend.values.get(&Setting::GameMode),
+            Some(&Value::dword(1))
+        );
+    }
+    #[test]
+    fn older_journal_without_phase_is_treated_as_uncertain() {
+        let raw = r#"{"schema":1,"entries":[{"setting":"GameMode","original":null,"applied":{"kind":4,"bytes":[1,0,0,0]}}]}"#;
+        let journal: Journal = serde_json::from_str(raw).unwrap();
+        assert_eq!(journal.entries[0].phase, Phase::Uncertain);
+        let mut backend = Fake::default();
+        backend.values.insert(Setting::GameMode, Value::dword(1));
+        let mut store = Memory(Some(journal.clone()));
+        assert_eq!(
+            restore(&mut backend, &mut store, &journal)
+                .unwrap()
+                .conflicts,
+            vec![Setting::GameMode]
+        );
     }
     #[test]
     fn rejects_tampered_target_values() {
@@ -388,6 +512,7 @@ mod tests {
                 setting: Setting::GameMode,
                 original: None,
                 applied: Value::dword(0),
+                phase: Phase::Pending,
             }],
         };
         assert!(apply(&mut backend, &mut store, &tampered).is_err());

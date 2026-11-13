@@ -33,6 +33,34 @@ fn main() {
         )
     }));
     if !matches!(result, Ok(Ok(()))) {
+        if smoke && let Some(path) = std::env::var_os("WFO_SMOKE_LOG") {
+            let detail = match &result {
+                Ok(Err(error)) => format!(
+                    "renderer={}; initialized={}; error={error:?}\n",
+                    if fallback { "wgpu" } else { "glow" },
+                    initialized.load(Ordering::Acquire)
+                ),
+                Err(payload) => format!(
+                    "renderer={}; initialized={}; panic={}\n",
+                    if fallback { "wgpu" } else { "glow" },
+                    initialized.load(Ordering::Acquire),
+                    payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied())
+                        .unwrap_or("unknown")
+                ),
+                Ok(Ok(())) => String::new(),
+            };
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = file.write_all(detail.as_bytes());
+            }
+        }
         // Winit cannot recreate an event loop in one process. Retry once in a
         // fresh process, and only before the application itself was created.
         if !fallback

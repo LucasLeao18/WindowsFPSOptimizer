@@ -132,6 +132,13 @@ mod tests {
             self.0 = Some(value.clone());
             Ok(())
         }
+        fn update(&mut self, old: &Journal, new: &Journal) -> Result<(), String> {
+            if self.0.as_ref() != Some(old) {
+                return Err("journal changed".into());
+            }
+            self.0 = Some(new.clone());
+            Ok(())
+        }
         fn clear(&mut self) -> Result<(), String> {
             self.0 = None;
             Ok(())

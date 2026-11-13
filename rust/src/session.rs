@@ -24,6 +24,18 @@ pub struct SessionJournal {
     pub process: ProcessIdentity,
     pub original: Priority,
     pub applied: Priority,
+    #[serde(default)]
+    pub phase: Phase,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Phase {
+    #[default]
+    Uncertain,
+    Pending,
+    Armed,
+    Applied,
+    Reverting,
 }
 
 /// `None` means that exact process has exited or its PID was reused.
@@ -40,6 +52,7 @@ pub trait ProcessBackend {
 pub trait SessionStore {
     fn load_session(&mut self) -> Result<Option<SessionJournal>, String>;
     fn save_session(&mut self, journal: &SessionJournal) -> Result<(), String>;
+    fn update_session(&mut self, old: &SessionJournal, new: &SessionJournal) -> Result<(), String>;
     fn clear_session(&mut self) -> Result<(), String>;
 }
 
@@ -73,11 +86,12 @@ pub fn begin<B: ProcessBackend, S: SessionStore>(
     ) {
         return Err("O jogo já usa prioridade igual ou maior. Nenhuma alteração foi feita.".into());
     }
-    let journal = SessionJournal {
+    let mut journal = SessionJournal {
         schema: 1,
         process,
         original,
         applied: Priority::AboveNormal,
+        phase: Phase::Pending,
     };
     store.save_session(&journal)?;
     if backend.priority(process)? != Some(original) {
@@ -85,6 +99,10 @@ pub fn begin<B: ProcessBackend, S: SessionStore>(
             "A prioridade mudou durante a análise; o registro de recuperação foi mantido.".into(),
         );
     }
+    let mut armed = journal.clone();
+    armed.phase = Phase::Armed;
+    store.update_session(&journal, &armed)?;
+    journal = armed;
     if let Err(error) = backend.set_priority(process, original, journal.applied) {
         let recovery = end(backend, store);
         return Err(format!(
@@ -97,6 +115,10 @@ pub fn begin<B: ProcessBackend, S: SessionStore>(
             "Não foi possível confirmar a prioridade. Recuperação: {recovery:?}"
         ));
     }
+    let mut applied = journal.clone();
+    applied.phase = Phase::Applied;
+    store.update_session(&journal, &applied)?;
+    journal = applied;
     Ok(journal)
 }
 
@@ -121,8 +143,13 @@ pub fn end<B: ProcessBackend, S: SessionStore>(
     let result = match backend.priority(journal.process)? {
         None => EndResult::ProcessExited,
         Some(value) if value == journal.original => EndResult::AlreadyOriginal,
-        Some(value) if value != journal.applied => return Ok(EndResult::Conflict),
+        Some(value) if journal.phase != Phase::Applied || value != journal.applied => {
+            return Ok(EndResult::Conflict);
+        }
         Some(_) => {
+            let mut reverting = journal.clone();
+            reverting.phase = Phase::Reverting;
+            store.update_session(&journal, &reverting)?;
             backend.set_priority(journal.process, journal.applied, journal.original)?;
             match backend.priority(journal.process)? {
                 Some(value) if value == journal.original => EndResult::Restored,
@@ -146,6 +173,17 @@ mod tests {
         }
         fn save_session(&mut self, value: &SessionJournal) -> Result<(), String> {
             self.0 = Some(value.clone());
+            Ok(())
+        }
+        fn update_session(
+            &mut self,
+            old: &SessionJournal,
+            new: &SessionJournal,
+        ) -> Result<(), String> {
+            if self.0.as_ref() != Some(old) {
+                return Err("session changed".into());
+            }
+            self.0 = Some(new.clone());
             Ok(())
         }
         fn clear_session(&mut self) -> Result<(), String> {
@@ -212,6 +250,64 @@ mod tests {
         assert_eq!(end(&mut b, &mut s).unwrap(), EndResult::Conflict);
         assert_eq!(b.value, Some(Priority::High));
         assert!(s.0.is_some());
+    }
+    #[test]
+    fn pending_session_never_undoes_a_matching_external_change() {
+        let (mut backend, mut store) = fixture();
+        let record = SessionJournal {
+            schema: 1,
+            process: backend.process,
+            original: Priority::Normal,
+            applied: Priority::AboveNormal,
+            phase: Phase::Pending,
+        };
+        store.save_session(&record).unwrap();
+        backend.value = Some(Priority::AboveNormal);
+        assert_eq!(end(&mut backend, &mut store).unwrap(), EndResult::Conflict);
+        assert_eq!(backend.value, Some(Priority::AboveNormal));
+        assert!(store.0.is_some());
+    }
+    #[test]
+    fn interrupted_write_with_unknown_origin_is_preserved() {
+        let (mut backend, mut store) = fixture();
+        let record = SessionJournal {
+            schema: 1,
+            process: backend.process,
+            original: Priority::Normal,
+            applied: Priority::AboveNormal,
+            phase: Phase::Armed,
+        };
+        store.save_session(&record).unwrap();
+        backend.value = Some(Priority::AboveNormal);
+        assert_eq!(end(&mut backend, &mut store).unwrap(), EndResult::Conflict);
+        assert_eq!(backend.value, Some(Priority::AboveNormal));
+        assert!(store.0.is_some());
+    }
+    #[test]
+    fn interrupted_restoration_does_not_claim_priority_again() {
+        let (mut backend, mut store) = fixture();
+        let record = SessionJournal {
+            schema: 1,
+            process: backend.process,
+            original: Priority::Normal,
+            applied: Priority::AboveNormal,
+            phase: Phase::Reverting,
+        };
+        store.save_session(&record).unwrap();
+        backend.value = Some(Priority::AboveNormal);
+        assert_eq!(end(&mut backend, &mut store).unwrap(), EndResult::Conflict);
+        assert_eq!(backend.value, Some(Priority::AboveNormal));
+    }
+    #[test]
+    fn legacy_session_without_phase_does_not_override_current_priority() {
+        let raw = r#"{"schema":1,"process":{"pid":42,"created":5},"original":"Normal","applied":"AboveNormal"}"#;
+        let record: SessionJournal = serde_json::from_str(raw).unwrap();
+        assert_eq!(record.phase, Phase::Uncertain);
+        let (mut backend, _) = fixture();
+        backend.value = Some(Priority::AboveNormal);
+        let mut store = Memory(Some(record));
+        assert_eq!(end(&mut backend, &mut store).unwrap(), EndResult::Conflict);
+        assert_eq!(backend.value, Some(Priority::AboveNormal));
     }
     #[test]
     fn reused_pid_is_never_modified() {

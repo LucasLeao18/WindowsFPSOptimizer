@@ -649,7 +649,7 @@ fn restore_system() -> Result<String, String> {
                 .collect::<Vec<_>>()
                 .join("; ");
             return Ok(format!(
-                "Restauração parcial. Conflitos: {}. Erros: {}. O backup foi mantido; configurações alteradas por outros programas não foram substituídas.",
+                "Restauração parcial. Conflitos ou alterações de origem incerta: {}. Erros: {}. Os valores em conflito e o backup foram preservados; revise-os no Windows.",
                 if conflicts.is_empty() {
                     "nenhum"
                 } else {
@@ -699,7 +699,7 @@ fn stop_session() -> Result<String, String> {
         EndResult::Restored => "Prioridade original restaurada. O jogo permanece aberto.",
         EndResult::AlreadyOriginal => "A prioridade já estava no valor anterior.",
         EndResult::ProcessExited => "O processo do jogo já terminou; a sessão foi encerrada.",
-        EndResult::Conflict => "Outro programa alterou a prioridade. Ela foi preservada e o registro da sessão foi mantido.",
+        EndResult::Conflict => "A prioridade está em conflito ou sua origem é incerta. Ela e o registro da sessão foram preservados.",
     }.into())
 }
 

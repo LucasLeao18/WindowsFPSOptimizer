@@ -216,4 +216,65 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn isolated_registry_transaction_recovers_after_reopening_backup() {
+        use crate::{
+            storage::FileStore,
+            transaction::{self, Store},
+        };
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let key = format!(
+            r"Software\WindowsFPSOptimizerRustTests\transaction-{}-{unique}",
+            std::process::id()
+        );
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                unsafe {
+                    RegDeleteTreeW(HKEY_CURRENT_USER, wide(&self.0).as_ptr());
+                }
+            }
+        }
+        let _cleanup = Cleanup(key.clone());
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("registry-transaction-{unique}"));
+        let mut backend = WindowsRegistry {
+            test_root: Some(key),
+        };
+        let initial = Value {
+            kind: REG_BINARY,
+            bytes: vec![1, 2, 3],
+        };
+        backend.write(Setting::GameMode, &initial).unwrap();
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            let plan = transaction::prepare(
+                &mut backend,
+                &[
+                    (Setting::GameMode, Value::dword(1)),
+                    (Setting::Transparency, Value::dword(0)),
+                ],
+            )
+            .unwrap();
+            transaction::apply(&mut backend, &mut store, &plan).unwrap();
+        }
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            let saved = store.load().unwrap().unwrap();
+            assert_eq!(
+                transaction::restore(&mut backend, &mut store, &saved)
+                    .unwrap()
+                    .restored
+                    .len(),
+                2
+            );
+            assert_eq!(backend.read(Setting::GameMode).unwrap(), Some(initial));
+            assert_eq!(backend.read(Setting::Transparency).unwrap(), None);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
