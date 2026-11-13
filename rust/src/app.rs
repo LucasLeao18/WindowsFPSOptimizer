@@ -820,8 +820,13 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         );
     }
     let process = windows_process::launch(&path)?;
-    session::begin(&mut WindowsProcess, &mut store, process)
+    let priority = session::begin(&mut WindowsProcess, &mut store, process)
         .map_err(|e| format!("O jogo foi iniciado, mas a sessão não pôde ser aplicada: {e}"))?;
+    let priority_message = if priority.phase == session::Phase::Unchanged {
+        "A prioridade do jogo já era igual ou superior e foi mantida."
+    } else {
+        "A prioridade original foi salva."
+    };
     let power = match power_session::begin(&mut WindowsPower, &mut store, process) {
         Ok(BeginResult::Applied) => {
             "Plano Alto Desempenho ativado; o plano anterior foi salvo.".to_string()
@@ -847,7 +852,7 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         ),
     };
     Ok(format!(
-        "Jogo iniciado. A prioridade original foi salva; use Restaurar sessão para encerrá-la sem fechar o jogo. {power} {sleep} {monitor}"
+        "Jogo iniciado. {priority_message} Use Restaurar sessão para encerrá-la sem fechar o jogo. {power} {sleep} {monitor}"
     ))
 }
 
@@ -882,6 +887,7 @@ pub(crate) fn stop_session() -> Result<String, String> {
             Ok(PriorityEnd::Conflict) => {
                 "A prioridade mudou ou está incerta; registro preservado.".into()
             }
+            Ok(PriorityEnd::Unchanged) => "A prioridade não foi alterada pela sessão.".into(),
             Err(error) => format!("Prioridade: {error}"),
         }),
         Err(error) => messages.push(format!("Prioridade: {error}")),

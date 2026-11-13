@@ -36,6 +36,7 @@ pub enum Phase {
     Armed,
     Applied,
     Reverting,
+    Unchanged,
 }
 
 /// `None` means that exact process has exited or its PID was reused.
@@ -62,6 +63,7 @@ pub enum EndResult {
     AlreadyOriginal,
     ProcessExited,
     Conflict,
+    Unchanged,
 }
 
 /// Store the previous value durably before changing the game process.
@@ -84,7 +86,15 @@ pub fn begin<B: ProcessBackend, S: SessionStore>(
         original,
         Priority::AboveNormal | Priority::High | Priority::Realtime
     ) {
-        return Err("O jogo já usa prioridade igual ou maior. Nenhuma alteração foi feita.".into());
+        let journal = SessionJournal {
+            schema: 1,
+            process,
+            original,
+            applied: original,
+            phase: Phase::Unchanged,
+        };
+        store.save_session(&journal)?;
+        return Ok(journal);
     }
     let mut journal = SessionJournal {
         schema: 1,
@@ -129,10 +139,22 @@ pub fn end<B: ProcessBackend, S: SessionStore>(
     let journal = store
         .load_session()?
         .ok_or("Não há sessão para restaurar.")?;
-    if journal.schema != 1
-        || journal.process.pid == 0
-        || journal.process.created == 0
-        || journal.applied != Priority::AboveNormal
+    if journal.schema != 1 || journal.process.pid == 0 || journal.process.created == 0 {
+        return Err("Registro de sessão inválido.".into());
+    }
+    if journal.phase == Phase::Unchanged {
+        if journal.original != journal.applied
+            || !matches!(
+                journal.original,
+                Priority::AboveNormal | Priority::High | Priority::Realtime
+            )
+        {
+            return Err("Registro de sessão inválido.".into());
+        }
+        store.clear_session()?;
+        return Ok(EndResult::Unchanged);
+    }
+    if journal.applied != Priority::AboveNormal
         || matches!(
             journal.original,
             Priority::AboveNormal | Priority::High | Priority::Realtime
@@ -240,6 +262,21 @@ mod tests {
         assert_eq!(end(&mut b, &mut s).unwrap(), EndResult::Restored);
         assert_eq!(b.value, Some(Priority::Normal));
         assert!(s.0.is_none());
+    }
+    #[test]
+    fn higher_existing_priority_is_never_lowered_or_restored() {
+        for original in [Priority::AboveNormal, Priority::High, Priority::Realtime] {
+            let (mut backend, mut store) = fixture();
+            backend.value = Some(original);
+            let id = backend.process;
+            let record = begin(&mut backend, &mut store, id).unwrap();
+            assert_eq!(record.phase, Phase::Unchanged);
+            assert_eq!(backend.value, Some(original));
+            backend.value = Some(Priority::Normal);
+            assert_eq!(end(&mut backend, &mut store).unwrap(), EndResult::Unchanged);
+            assert_eq!(backend.value, Some(Priority::Normal));
+            assert!(store.0.is_none());
+        }
     }
     #[test]
     fn preserves_external_priority_changes() {
