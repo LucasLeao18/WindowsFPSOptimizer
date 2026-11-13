@@ -359,6 +359,19 @@ mod tests {
         assert!(!protected_name(std::path::Path::new(r"C:\Games\game.exe")));
     }
     #[test]
+    fn detects_resolved_windows_directory() {
+        let mut buffer = vec![0u16; 32_768];
+        let count =
+            unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+        assert!(count > 0 && count < buffer.len());
+        let root = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..count]));
+        let resolved = std::fs::canonicalize(root).unwrap();
+        assert!(is_windows_image(&resolved).unwrap());
+        assert!(is_windows_image(&resolved.join("System32")).unwrap());
+        let unrelated = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        assert!(!is_windows_image(&unrelated).unwrap());
+    }
+    #[test]
     #[ignore = "Terminates only an explicitly built, isolated test fixture"]
     fn terminates_isolated_fixture_after_identity_checks() {
         let path =
