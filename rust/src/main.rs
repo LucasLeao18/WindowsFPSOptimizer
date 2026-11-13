@@ -3,9 +3,16 @@ mod app;
 #[cfg(windows)]
 mod native_fallback;
 #[cfg(windows)]
+mod session_monitor;
+#[cfg(windows)]
 mod sleep_guard;
 use eframe::egui;
 fn main() {
+    #[cfg(windows)]
+    if std::env::args_os().any(|arg| arg == "--session-monitor") {
+        session_monitor::run();
+        return;
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},

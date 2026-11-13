@@ -386,7 +386,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                         if let Some(path) = game.clone() {
                             if confirm(
                                 window,
-                                "Iniciar o jogo e tentar ajustar sua prioridade, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Reabra o aplicativo para restaurar o plano se ele for fechado antes do jogo.",
+                                "Iniciar o jogo e tentar ajustar sua prioridade, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Um monitor discreto tentará restaurar a sessão quando o jogo terminar.",
                             ) {
                                 set_text(output, "Iniciando o jogo...");
                                 pending = Some(start(move || {

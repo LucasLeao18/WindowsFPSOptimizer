@@ -581,7 +581,7 @@ impl eframe::App for App {
         }
         if self.confirm_session {
             egui::Window::new("Iniciar sessão do jogo").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("O jogo será iniciado. O aplicativo tentará ajustar a prioridade e ativar o plano Alto Desempenho existente, salvando os valores anteriores. Esse plano pode aumentar consumo e temperatura. Também tentará impedir a suspensão enquanto o jogo e o aplicativo estiverem abertos; a tela ainda poderá apagar. Se o aplicativo for fechado, reabra-o para restaurar o plano após o jogo.");
+                ui.label("O jogo será iniciado. O aplicativo tentará ajustar a prioridade e ativar o plano Alto Desempenho existente, salvando os valores anteriores. Esse plano pode aumentar consumo e temperatura. Também tentará impedir a suspensão enquanto o jogo e o aplicativo estiverem abertos; a tela ainda poderá apagar. Um monitor discreto tentará restaurar o plano ao fim do jogo.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Iniciar jogo")).clicked() {
@@ -840,8 +840,14 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
             "Não foi possível impedir a suspensão automática; confira as opções de energia do Windows."
         }
     };
+    let monitor = match crate::session_monitor::launch() {
+        Ok(()) => "O monitor tentará restaurar a sessão mesmo se a janela for fechada.".to_string(),
+        Err(error) => format!(
+            "{error}. Mantenha o aplicativo aberto ou reabra-o após o jogo para restaurar a sessão."
+        ),
+    };
     Ok(format!(
-        "Jogo iniciado. A prioridade original foi salva; use Restaurar sessão para encerrá-la sem fechar o jogo. {power} {sleep}"
+        "Jogo iniciado. A prioridade original foi salva; use Restaurar sessão para encerrá-la sem fechar o jogo. {power} {sleep} {monitor}"
     ))
 }
 

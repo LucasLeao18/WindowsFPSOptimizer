@@ -83,6 +83,30 @@ jobs:
           if ($imports -match '(?i)\b(vcruntime|msvcp|concrt)[a-z0-9_]*\.dll\b') {
             throw 'The executable requires a separate Visual C++ runtime DLL'
           }
+      - name: Verify independent session monitor
+        run: |
+          $previousLocal = $env:LOCALAPPDATA
+          $testLocal = Join-Path $env:RUNNER_TEMP ("wfo-monitor-" + [guid]::NewGuid().ToString('N'))
+          $state = Join-Path $testLocal 'WindowsFPSOptimizerRust\State'
+          New-Item -ItemType Directory -Path $state -Force | Out-Null
+          $env:LOCALAPPDATA = $testLocal
+          $fixture = $null
+          $monitor = $null
+          try {
+            $fixture = Start-Process -FilePath (Resolve-Path target/idle_game.exe).Path -WindowStyle Hidden -PassThru
+            $identity = @{ pid = $fixture.Id; created = $fixture.StartTime.ToFileTimeUtc() }
+            $record = @{ schema = 1; process = $identity; original = 'Normal'; applied = 'AboveNormal'; phase = 'Applied' }
+            $journal = Join-Path $state 'session.json'
+            $record | ConvertTo-Json -Compress | Set-Content -LiteralPath $journal -Encoding utf8NoBOM
+            $exe = (Resolve-Path "target\${{ matrix.target }}\release\windows-fps-optimizer.exe").Path
+            $monitor = Start-Process -FilePath $exe -ArgumentList '--session-monitor' -WindowStyle Hidden -PassThru
+            if (-not $monitor.WaitForExit(30000)) { throw 'Session monitor did not exit after the isolated game' }
+            if ($monitor.ExitCode -ne 0 -or (Test-Path -LiteralPath $journal)) { throw 'Session monitor did not finalize the isolated game journal' }
+          } finally {
+            if ($monitor -and -not $monitor.HasExited) { $monitor.Kill() }
+            if ($fixture -and -not $fixture.HasExited) { $fixture.Kill() }
+            $env:LOCALAPPDATA = $previousLocal
+          }
       - name: Smoke test graphical compatibility paths
         run: |
           $exe = (Resolve-Path "target\${{ matrix.target }}\release\windows-fps-optimizer.exe").Path
