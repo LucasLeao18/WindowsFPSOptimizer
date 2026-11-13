@@ -112,6 +112,7 @@ mod tests {
     }
 }
 pub mod power_session;
+pub mod startup;
 #[cfg(windows)]
 pub mod temp_cleanup;
 #[cfg(not(windows))]
@@ -119,3 +120,5 @@ pub mod temp_cleanup;
 pub mod temp_cleanup;
 #[cfg(windows)]
 pub mod windows_power;
+#[cfg(windows)]
+pub mod windows_startup;

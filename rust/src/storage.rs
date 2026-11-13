@@ -2,6 +2,7 @@
 use crate::{
     power_session::{Journal as PowerJournal, Store as PowerStore},
     session::{SessionJournal, SessionStore},
+    startup::{Journal as StartupJournal, Store as StartupStore},
     transaction::{Journal, Store},
 };
 use fs2::FileExt;
@@ -11,11 +12,13 @@ use std::{
     path::PathBuf,
 };
 const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+const MAX_STARTUP_BYTES: usize = 9 * 1024 * 1024;
 
 pub struct FileStore {
     file: PathBuf,
     session_file: PathBuf,
     power_file: PathBuf,
+    startup_file: PathBuf,
     _lock: File,
 }
 
@@ -36,6 +39,7 @@ impl FileStore {
             file: directory.join("active.json"),
             session_file: directory.join("session.json"),
             power_file: directory.join("power-session.json"),
+            startup_file: directory.join("startup.json"),
             _lock: lock,
         })
     }
@@ -47,6 +51,9 @@ impl FileStore {
     }
     pub fn archive_power(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.power_file, "power-session", 65_536)
+    }
+    pub fn archive_startup(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.startup_file, "startup", MAX_STARTUP_BYTES)
     }
     /// Archive raw records even if damaged, so recovery is not blocked by parsing.
     pub fn archive_session_records(&mut self) -> Result<Vec<PathBuf>, String> {
@@ -100,6 +107,68 @@ impl FileStore {
             serde_json::from_slice(&bytes).map_err(|e| format!("Backup inválido: {e}"))?;
         crate::transaction::validate(&journal)?;
         Store::save(self, &journal)
+    }
+}
+
+impl StartupStore for FileStore {
+    fn load_startup(&mut self) -> Result<Option<StartupJournal>, String> {
+        let file = match File::open(&self.startup_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o backup de inicialização: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_STARTUP_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_STARTUP_BYTES {
+            return Err("O backup de inicialização é grande demais.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Backup de inicialização inválido: {e}"))
+    }
+    fn save_startup(&mut self, journal: &StartupJournal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_STARTUP_BYTES {
+            return Err("O backup de inicialização é grande demais.".into());
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.startup_file)
+            .map_err(|e| format!("Não foi possível criar o backup de inicialização: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.startup_file);
+            return Err(format!(
+                "Não foi possível salvar o backup de inicialização: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update_startup(&mut self, old: &StartupJournal, new: &StartupJournal) -> Result<(), String> {
+        if self.load_startup()?.as_ref() != Some(old) {
+            return Err("O backup de inicialização mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_STARTUP_BYTES {
+            return Err("O backup de inicialização é grande demais.".into());
+        }
+        replace_record(&self.startup_file, &bytes)
+    }
+    fn clear_startup(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.startup_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o backup de inicialização: {error}"
+            )),
+        }
     }
 }
 

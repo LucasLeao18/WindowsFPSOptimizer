@@ -6,6 +6,8 @@ Há uma interface inicial acessível, análise e aplicação parcial dos perfis 
 
 Na interface avançada, a limpeza de temporários é uma ação manual: analisa arquivos com mais de sete dias diretamente em `LocalAppData\Temp` e pede confirmação para removê-los permanentemente. Ela não percorre subpastas e preserva arquivos alterados desde a análise ou impossíveis de verificar. Nenhum perfil inicia a limpeza.
 
+A interface avançada também permite revisar e desativar individualmente entradas de inicialização da chave `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. O comando selecionado é exibido antes da confirmação, o valor é salvo e a alteração utiliza uma transação do Registro. Entradas protegidas e conflitos não são alterados. Outras origens, incluindo entradas de máquina e atalhos na pasta de inicialização, ainda não foram portadas.
+
 A interface tenta OpenGL e, se a inicialização falhar antes de o aplicativo abrir, tenta um segundo renderizador. Se nenhum estiver disponível, abre uma interface nativa de compatibilidade com os três perfis e a recuperação de backups; as ferramentas avançadas ainda exigem a interface completa. A disponibilidade depende do Windows, dos drivers e do ambiente gráfico; acesso remoto e máquinas virtuais também precisam de validação.
 
 Com Rust e uma toolchain de link para Windows instalados:

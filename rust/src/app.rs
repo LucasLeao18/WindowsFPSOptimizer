@@ -15,6 +15,7 @@ use windows_fps_optimizer::{
     engine::{self, Preview},
     process_control::{self, Candidate, Termination},
     process_inventory::{self, Inventory, Process as ListedProcess},
+    startup::{self, Entry as StartupEntry, Item as StartupItem},
     storage::FileStore,
     temp_cleanup::{self, Plan as CleanupPlan, Report as CleanupReport},
     transaction::Setting,
@@ -31,6 +32,8 @@ enum JobResult {
     Diagnostics(Snapshot),
     TempEstimate(Result<CleanupPlan, String>),
     TempCleanup(Result<CleanupReport, String>),
+    StartupList(Result<StartupSnapshot, String>),
+    StartupChanged(Result<String, String>),
     ProcessInventory(Result<Inventory, String>),
     ProcessInspection(Result<Candidate, String>),
     ProcessTerminated(Result<Termination, String>),
@@ -40,6 +43,13 @@ pub(crate) enum SessionCheck {
     None,
     Running,
     Finished,
+}
+
+struct StartupSnapshot {
+    available: Vec<StartupItem>,
+    backed_up: Vec<StartupEntry>,
+    skipped: usize,
+    truncated: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -105,6 +115,12 @@ pub struct App {
     diagnostics: Option<Snapshot>,
     temp_plan: Option<CleanupPlan>,
     confirm_temp: bool,
+    startup_snapshot: Option<StartupSnapshot>,
+    startup_selected: Option<StartupItem>,
+    startup_restore_selected: Option<String>,
+    startup_filter: String,
+    confirm_startup: bool,
+    confirm_archive_startup: bool,
     processes: Option<Inventory>,
     selected_process: Option<ListedProcess>,
     process_candidate: Option<Candidate>,
@@ -167,6 +183,12 @@ impl App {
             diagnostics: None,
             temp_plan: None,
             confirm_temp: false,
+            startup_snapshot: None,
+            startup_selected: None,
+            startup_restore_selected: None,
+            startup_filter: String::new(),
+            confirm_startup: false,
+            confirm_archive_startup: false,
             processes: None,
             selected_process: None,
             process_candidate: None,
@@ -208,6 +230,8 @@ impl App {
                             | JobResult::SessionStopped(Err(_))
                             | JobResult::TempEstimate(Err(_))
                             | JobResult::TempCleanup(Err(_))
+                            | JobResult::StartupList(Err(_))
+                            | JobResult::StartupChanged(Err(_))
                             | JobResult::ProcessInventory(Err(_))
                             | JobResult::ProcessInspection(Err(_))
                             | JobResult::ProcessTerminated(Err(_))
@@ -267,6 +291,24 @@ impl App {
                             report.skipped
                         );
                     }
+                    JobResult::StartupList(Ok(snapshot)) => {
+                        self.startup_snapshot = Some(snapshot);
+                        self.startup_selected = None;
+                        self.startup_restore_selected = None;
+                        self.status = "Lista de inicialização atualizada.".into();
+                    }
+                    JobResult::StartupChanged(Ok(message)) => {
+                        self.startup_snapshot = None;
+                        self.startup_selected = None;
+                        self.startup_restore_selected = None;
+                        self.status = message;
+                    }
+                    JobResult::StartupChanged(Err(error)) => {
+                        self.startup_snapshot = None;
+                        self.startup_selected = None;
+                        self.startup_restore_selected = None;
+                        self.status = format!("{error} Atualize a lista para revisar os backups.");
+                    }
                     JobResult::ProcessInventory(Ok(inventory)) => {
                         self.processes = Some(inventory);
                         self.selected_process = None;
@@ -312,6 +354,7 @@ impl App {
                     | JobResult::SessionStopped(Err(error))
                     | JobResult::TempEstimate(Err(error))
                     | JobResult::TempCleanup(Err(error))
+                    | JobResult::StartupList(Err(error))
                     | JobResult::ProcessInventory(Err(error))
                     | JobResult::ProcessInspection(Err(error))
                     | JobResult::ProcessTerminated(Err(error))
@@ -542,6 +585,54 @@ impl eframe::App for App {
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Encerrar processo selecionado")).clicked() { self.confirm_process = true; }
                     }
                     ui.add_space(24.0);
+                    ui.heading("Inicialização do usuário");
+                    ui.label("Gerencie entradas do usuário atual. Revise o comando e escolha cada item; os perfis não desativam programas automaticamente.");
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Atualizar inicialização")).clicked() {
+                        self.startup_snapshot = None; self.startup_selected = None; self.startup_restore_selected = None;
+                        self.status = "Lendo inicialização...".into(); self.run(&ctx, || JobResult::StartupList(startup_list()));
+                    }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups de inicialização")).clicked() { self.confirm_archive_startup = true; }
+                    if let Some(snapshot) = &self.startup_snapshot {
+                        ui.label(format!("{} entrada(s) ativas • {} com backup", snapshot.available.len(), snapshot.backed_up.len()));
+                        if snapshot.skipped > 0 || snapshot.truncated { ui.label("A lista é parcial: alguns itens não puderam ser lidos ou o limite foi atingido."); }
+                        ui.horizontal(|ui| {
+                            ui.label("Buscar por nome:");
+                            if ui.text_edit_singleline(&mut self.startup_filter).changed() { self.startup_selected = None; self.confirm_startup = false; }
+                        });
+                        let query = self.startup_filter.to_lowercase();
+                        let visible_count = snapshot.available.iter().filter(|item| item.name.to_lowercase().contains(&query)).count();
+                        let mut selected = None;
+                        egui::ScrollArea::vertical().id_salt("startup-active").max_height(140.0).show(ui, |ui| {
+                            for item in snapshot.available.iter().filter(|item| item.name.to_lowercase().contains(&query)).take(256) {
+                                let is_selected = self.startup_selected.as_ref().is_some_and(|current| current.name == item.name);
+                                if ui.selectable_label(is_selected, &item.name).clicked() { selected = Some(item.clone()); }
+                            }
+                        });
+                        if visible_count > 256 { ui.label("A lista mostra as primeiras 256 entradas encontradas; refine a busca para ver as demais."); }
+                        if let Some(item) = selected { self.startup_selected = Some(item); }
+                        if let Some(item) = &self.startup_selected {
+                            ui.label(format!("Comando: {}", startup::command_text(&item.value)));
+                            let validation = startup::validate_item(item);
+                            if let Err(error) = &validation { ui.label(error); }
+                            if ui.add_enabled(self.receiver.is_none() && validation.is_ok(), egui::Button::new("Desativar item selecionado")).clicked() { self.confirm_startup = true; }
+                        }
+                        if !snapshot.backed_up.is_empty() {
+                            ui.label("Itens com backup:");
+                            let mut chosen = None;
+                            egui::ScrollArea::vertical().id_salt("startup-backup").max_height(120.0).show(ui, |ui| {
+                                for entry in &snapshot.backed_up {
+                                    let state = match entry.phase { startup::Phase::Pending => "pendente", startup::Phase::Armed => "verificação necessária", startup::Phase::Applied => "desativado", startup::Phase::Reverting => "restauração interrompida" };
+                                    if ui.selectable_label(self.startup_restore_selected.as_deref() == Some(entry.item.name.as_str()), format!("{} ({state})", entry.item.name)).clicked() { chosen = Some(entry.item.name.clone()); }
+                                }
+                            });
+                            if let Some(name) = chosen { self.startup_restore_selected = Some(name); }
+                            if ui.add_enabled(self.receiver.is_none() && self.startup_restore_selected.is_some(), egui::Button::new("Restaurar item selecionado")).clicked()
+                                && let Some(name) = self.startup_restore_selected.clone() {
+                                self.status = "Restaurando item...".into(); self.run(&ctx, move || JobResult::StartupChanged(startup_restore(name)));
+                            }
+                        }
+                    }
+                    ui.add_space(24.0);
                     ui.heading("Arquivos temporários");
                     ui.label("Analise arquivos com mais de sete dias diretamente na pasta temporária do usuário; subpastas não são incluídas.");
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Analisar sem remover arquivos")).clicked() {
@@ -627,6 +718,35 @@ impl eframe::App for App {
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter configurações")).clicked() {
                         self.confirm_archive_backup = false;
                         self.run(&ctx, || JobResult::Restored(archive_backup()));
+                    }
+                });
+            });
+        }
+        if self.confirm_archive_startup {
+            egui::Window::new("Arquivar backups de inicialização").collapsible(false).resizable(false).show(&ctx, |ui| {
+                ui.label("Todos os backups de inicialização serão movidos para o histórico. Os itens atuais do Windows não serão alterados e esses backups não serão restaurados automaticamente.");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_archive_startup = false; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups")).clicked() {
+                        self.confirm_archive_startup = false;
+                        self.status = "Arquivando backups de inicialização...".into();
+                        self.run(&ctx, || JobResult::StartupChanged(startup_archive()));
+                    }
+                });
+            });
+        }
+        if self.confirm_startup {
+            egui::Window::new("Confirmar inicialização").collapsible(false).resizable(true).show(&ctx, |ui| {
+                if let Some(item) = &self.startup_selected {
+                    ui.label(format!("Desativar {} da inicialização do usuário?", item.name));
+                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| { ui.label(format!("Comando: {}", startup::command_text(&item.value))); });
+                    ui.label("O valor será salvo para restauração. O programa não será desinstalado nem encerrado.");
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_startup = false; }
+                    if ui.add_enabled(self.receiver.is_none() && self.startup_selected.is_some(), egui::Button::new("Salvar e desativar")).clicked() {
+                        self.confirm_startup = false;
+                        if let Some(item) = self.startup_selected.clone() { self.status = "Salvando backup e desativando...".into(); self.run(&ctx, move || JobResult::StartupChanged(startup_disable(item))); }
                     }
                 });
             });
@@ -819,6 +939,75 @@ pub(crate) fn restore_system() -> Result<String, String> {
             report.restored.len()
         ))
     })
+}
+
+#[cfg(windows)]
+fn startup_list() -> Result<StartupSnapshot, String> {
+    use windows_fps_optimizer::{startup::Store as StartupStore, windows_startup::WindowsStartup};
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    let backed_up = match store.load_startup()? {
+        Some(journal) => {
+            startup::validate(&journal)?;
+            journal.entries
+        }
+        None => Vec::new(),
+    };
+    let inventory = WindowsStartup::default().list()?;
+    let mut available = inventory.items;
+    available.sort_by_cached_key(|item| item.name.to_lowercase());
+    Ok(StartupSnapshot {
+        available,
+        backed_up,
+        skipped: inventory.skipped,
+        truncated: inventory.truncated,
+    })
+}
+#[cfg(windows)]
+fn startup_disable(item: StartupItem) -> Result<String, String> {
+    use windows_fps_optimizer::windows_startup::WindowsStartup;
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    startup::disable(&mut WindowsStartup::default(), &mut store, &item)?;
+    Ok("Item desativado e backup salvo. Atualize a lista para revisar ou restaurar.".into())
+}
+#[cfg(windows)]
+fn startup_restore(name: String) -> Result<String, String> {
+    use windows_fps_optimizer::{startup::RestoreResult, windows_startup::WindowsStartup};
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    match startup::restore(&mut WindowsStartup::default(), &mut store, &name)? {
+        RestoreResult::Restored => Ok("Item de inicialização restaurado. Atualize a lista.".into()),
+        RestoreResult::AlreadyOriginal => {
+            Ok("O valor original já estava presente; o backup foi finalizado.".into())
+        }
+        RestoreResult::Conflict => Err(
+            "O item mudou ou sua situação é incerta; o valor atual e o backup foram preservados."
+                .into(),
+        ),
+    }
+}
+#[cfg(windows)]
+fn startup_archive() -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    let path = store.archive_startup()?;
+    Ok(format!(
+        "Backups de inicialização arquivados em {}. Os itens atuais foram preservados.",
+        path.display()
+    ))
+}
+#[cfg(not(windows))]
+fn startup_list() -> Result<StartupSnapshot, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn startup_disable(_: StartupItem) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn startup_restore(_: String) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn startup_archive() -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
 }
 
 #[cfg(windows)]
