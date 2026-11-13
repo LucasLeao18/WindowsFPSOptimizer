@@ -112,6 +112,7 @@ mod tests {
     }
 }
 pub mod power_session;
+pub mod services;
 pub mod startup;
 #[cfg(windows)]
 pub mod temp_cleanup;
@@ -121,5 +122,7 @@ pub mod temp_cleanup;
 pub mod visual_session;
 #[cfg(windows)]
 pub mod windows_power;
+#[cfg(windows)]
+pub mod windows_services;
 #[cfg(windows)]
 pub mod windows_startup;

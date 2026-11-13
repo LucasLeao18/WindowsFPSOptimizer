@@ -1,6 +1,7 @@
 //! Durable journal with a process-wide lock and exclusive creation.
 use crate::{
     power_session::{Journal as PowerJournal, Store as PowerStore},
+    services::{Journal as ServicesJournal, Store as ServicesStore},
     session::{SessionJournal, SessionStore},
     startup::{Journal as StartupJournal, Store as StartupStore},
     transaction::{Journal, Store},
@@ -20,6 +21,7 @@ pub struct FileStore {
     power_file: PathBuf,
     startup_file: PathBuf,
     visual_session_file: PathBuf,
+    services_file: PathBuf,
     _lock: File,
 }
 
@@ -42,6 +44,7 @@ impl FileStore {
             power_file: directory.join("power-session.json"),
             startup_file: directory.join("startup.json"),
             visual_session_file: directory.join("visual-session.json"),
+            services_file: directory.join("services.json"),
             _lock: lock,
         })
     }
@@ -89,6 +92,39 @@ impl FileStore {
     }
     pub fn archive_startup(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.startup_file, "startup", MAX_STARTUP_BYTES)
+    }
+    pub fn archive_services(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.services_file, "services", 65_536)
+    }
+    pub fn activate_services(&mut self, selected: &std::path::Path) -> Result<(), String> {
+        if self.load_services()?.is_some() {
+            return Err("Já existe um backup de serviços ativo.".into());
+        }
+        let history = self
+            .services_file
+            .parent()
+            .ok_or("Pasta de backup inválida.")?
+            .join("History");
+        let history =
+            fs::canonicalize(history).map_err(|e| format!("Histórico indisponível: {e}"))?;
+        let selected =
+            fs::canonicalize(selected).map_err(|e| format!("Backup indisponível: {e}"))?;
+        if selected.parent() != Some(history.as_path()) {
+            return Err("Selecione um arquivo diretamente do histórico deste aplicativo.".into());
+        }
+        let file =
+            File::open(selected).map_err(|e| format!("Não foi possível abrir o backup: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de serviços é grande demais.".into());
+        }
+        let journal: ServicesJournal = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Backup de serviços inválido: {e}"))?;
+        crate::services::validate(&journal)?;
+        self.save_services(&journal)
     }
     /// Reopen a validated archived startup journal without changing Windows.
     pub fn activate_startup(&mut self, selected: &std::path::Path) -> Result<(), String> {
@@ -247,6 +283,72 @@ impl Store for VisualSessionStore<'_> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
                 "Não foi possível finalizar o backup visual da sessão: {error}"
+            )),
+        }
+    }
+}
+
+impl ServicesStore for FileStore {
+    fn load_services(&mut self) -> Result<Option<ServicesJournal>, String> {
+        let file = match File::open(&self.services_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o backup de serviços: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de serviços é grande demais.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Backup de serviços inválido: {e}"))
+    }
+    fn save_services(&mut self, journal: &ServicesJournal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de serviços é grande demais.".into());
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.services_file)
+            .map_err(|e| format!("Não foi possível criar o backup de serviços: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.services_file);
+            return Err(format!(
+                "Não foi possível salvar o backup de serviços: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update_services(
+        &mut self,
+        old: &ServicesJournal,
+        new: &ServicesJournal,
+    ) -> Result<(), String> {
+        if self.load_services()?.as_ref() != Some(old) {
+            return Err("O backup de serviços mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de serviços é grande demais.".into());
+        }
+        replace_record(&self.services_file, &bytes)
+    }
+    fn clear_services(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.services_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o backup de serviços: {error}"
             )),
         }
     }

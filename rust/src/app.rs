@@ -15,6 +15,7 @@ use windows_fps_optimizer::{
     engine::{self, Preview},
     process_control::{self, Candidate, Termination},
     process_inventory::{self, Inventory, Process as ListedProcess},
+    services::{self, Entry as ServiceEntry, Service, Status as ServiceStatus},
     startup::{self, Entry as StartupEntry, Item as StartupItem},
     storage::FileStore,
     temp_cleanup::{self, Plan as CleanupPlan, Report as CleanupReport},
@@ -34,6 +35,8 @@ enum JobResult {
     TempCleanup(Result<CleanupReport, String>),
     StartupList(Result<StartupSnapshot, String>),
     StartupChanged(Result<String, String>),
+    ServicesList(Result<ServiceSnapshot, String>),
+    ServicesChanged(Result<String, String>),
     ProcessInventory(Result<Inventory, String>),
     ProcessInspection(Result<Candidate, String>),
     ProcessTerminated(Result<Termination, String>),
@@ -50,6 +53,10 @@ struct StartupSnapshot {
     backed_up: Vec<StartupEntry>,
     skipped: usize,
     truncated: bool,
+}
+struct ServiceSnapshot {
+    items: Vec<(Service, Result<Option<ServiceStatus>, String>)>,
+    backed_up: Vec<ServiceEntry>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -121,6 +128,11 @@ pub struct App {
     startup_filter: String,
     confirm_startup: bool,
     confirm_archive_startup: bool,
+    service_snapshot: Option<ServiceSnapshot>,
+    service_selected: Option<Service>,
+    service_restore_selected: Option<Service>,
+    confirm_service: bool,
+    confirm_archive_services: bool,
     processes: Option<Inventory>,
     selected_process: Option<ListedProcess>,
     process_candidate: Option<Candidate>,
@@ -189,6 +201,11 @@ impl App {
             startup_filter: String::new(),
             confirm_startup: false,
             confirm_archive_startup: false,
+            service_snapshot: None,
+            service_selected: None,
+            service_restore_selected: None,
+            confirm_service: false,
+            confirm_archive_services: false,
             processes: None,
             selected_process: None,
             process_candidate: None,
@@ -232,6 +249,8 @@ impl App {
                             | JobResult::TempCleanup(Err(_))
                             | JobResult::StartupList(Err(_))
                             | JobResult::StartupChanged(Err(_))
+                            | JobResult::ServicesList(Err(_))
+                            | JobResult::ServicesChanged(Err(_))
                             | JobResult::ProcessInventory(Err(_))
                             | JobResult::ProcessInspection(Err(_))
                             | JobResult::ProcessTerminated(Err(_))
@@ -309,6 +328,24 @@ impl App {
                         self.startup_restore_selected = None;
                         self.status = format!("{error} Atualize a lista para revisar os backups.");
                     }
+                    JobResult::ServicesList(Ok(snapshot)) => {
+                        self.service_snapshot = Some(snapshot);
+                        self.service_selected = None;
+                        self.service_restore_selected = None;
+                        self.status = "Lista de serviços atualizada.".into();
+                    }
+                    JobResult::ServicesChanged(Ok(message)) => {
+                        self.service_snapshot = None;
+                        self.service_selected = None;
+                        self.service_restore_selected = None;
+                        self.status = message;
+                    }
+                    JobResult::ServicesChanged(Err(error)) => {
+                        self.service_snapshot = None;
+                        self.service_selected = None;
+                        self.service_restore_selected = None;
+                        self.status = format!("{error} Atualize a lista para revisar os backups.");
+                    }
                     JobResult::ProcessInventory(Ok(inventory)) => {
                         self.processes = Some(inventory);
                         self.selected_process = None;
@@ -355,6 +392,7 @@ impl App {
                     | JobResult::TempEstimate(Err(error))
                     | JobResult::TempCleanup(Err(error))
                     | JobResult::StartupList(Err(error))
+                    | JobResult::ServicesList(Err(error))
                     | JobResult::ProcessInventory(Err(error))
                     | JobResult::ProcessInspection(Err(error))
                     | JobResult::ProcessTerminated(Err(error))
@@ -590,6 +628,47 @@ impl eframe::App for App {
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Encerrar processo selecionado")).clicked() { self.confirm_process = true; }
                     }
                     ui.add_space(24.0);
+                    ui.heading("Serviços opcionais");
+                    ui.label("Escolha um serviço por vez e revise as consequências. Parar ou restaurar pode exigir executar o aplicativo como administrador; o tipo de inicialização não é alterado.");
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Atualizar serviços")).clicked() {
+                            self.service_snapshot = None; self.service_selected = None; self.service_restore_selected = None;
+                            self.status = "Consultando serviços...".into(); self.run(&ctx, || JobResult::ServicesList(services_list()));
+                        }
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups de serviços")).clicked() { self.confirm_archive_services = true; }
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup de serviços")).clicked() {
+                            let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                            if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
+                            if let Some(path) = dialog.pick_file() { self.status = "Reativando backup de serviços...".into(); self.run(&ctx, move || JobResult::ServicesChanged(services_activate(path))); }
+                        }
+                    });
+                    if let Some(snapshot) = &self.service_snapshot {
+                        let mut chosen = None;
+                        egui::ScrollArea::vertical().id_salt("services-list").max_height(160.0).show(ui, |ui| {
+                            for (service, state) in &snapshot.items {
+                                let text = match state { Ok(Some(ServiceStatus::Running)) => "em execução", Ok(Some(ServiceStatus::Stopped)) => "parado", Ok(Some(ServiceStatus::Transitioning)) => "em transição", Ok(None) => "não instalado", Err(_) => "consulta indisponível" };
+                                if ui.selectable_label(self.service_selected == Some(*service), format!("{} • {text}", service.title())).clicked() { chosen = Some(*service); }
+                            }
+                        });
+                        if let Some(service) = chosen { self.service_selected = Some(service); }
+                        if let Some(service) = self.service_selected {
+                            ui.label(format!("Impacto: {}", service.impact()));
+                            let state = snapshot.items.iter().find(|(item, _)| *item == service).map(|(_, state)| state);
+                            if let Some(Err(error)) = state { ui.label(error); }
+                            let can_stop = matches!(state, Some(Ok(Some(ServiceStatus::Running)))) && !snapshot.backed_up.iter().any(|entry| entry.service == service);
+                            if ui.add_enabled(self.receiver.is_none() && can_stop, egui::Button::new("Parar serviço selecionado")).clicked() { self.confirm_service = true; }
+                        }
+                        if !snapshot.backed_up.is_empty() {
+                            ui.label("Serviços com backup:");
+                            for entry in &snapshot.backed_up {
+                                let state = match entry.phase { services::Phase::Pending => "pendente", services::Phase::Armed => "verificação necessária", services::Phase::Applied => "parado pela operação", services::Phase::Reverting => "restauração interrompida" };
+                                if ui.selectable_label(self.service_restore_selected == Some(entry.service), format!("{} • {state}", entry.service.title())).clicked() { self.service_restore_selected = Some(entry.service); }
+                            }
+                            if ui.add_enabled(self.receiver.is_none() && self.service_restore_selected.is_some(), egui::Button::new("Restaurar serviço selecionado")).clicked()
+                                && let Some(service) = self.service_restore_selected { self.status = "Restaurando serviço...".into(); self.run(&ctx, move || JobResult::ServicesChanged(service_restore(service))); }
+                        }
+                    }
+                    ui.add_space(24.0);
                     ui.heading("Inicialização do usuário");
                     ui.label("Gerencie entradas do usuário atual. Revise o comando e escolha cada item; os perfis não desativam programas automaticamente.");
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Atualizar inicialização")).clicked() {
@@ -728,6 +807,34 @@ impl eframe::App for App {
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter configurações")).clicked() {
                         self.confirm_archive_backup = false;
                         self.run(&ctx, || JobResult::Restored(archive_backup()));
+                    }
+                });
+            });
+        }
+        if self.confirm_archive_services {
+            egui::Window::new("Arquivar backups de serviços").collapsible(false).resizable(false).show(&ctx, |ui| {
+                ui.label("Os serviços atuais não serão alterados. Os backups serão arquivados e poderão ser reativados pelo histórico para restauração posterior.");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_archive_services = false; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups")).clicked() {
+                        self.confirm_archive_services = false; self.status = "Arquivando backups de serviços...".into();
+                        self.run(&ctx, || JobResult::ServicesChanged(services_archive()));
+                    }
+                });
+            });
+        }
+        if self.confirm_service {
+            egui::Window::new("Confirmar parada do serviço").collapsible(false).resizable(false).show(&ctx, |ui| {
+                if let Some(service) = self.service_selected {
+                    ui.label(format!("Parar {} ({})?", service.title(), service.name()));
+                    ui.label(service.impact());
+                    ui.label("O estado atual será salvo. Esta operação não altera a inicialização do serviço e pode exigir administrador. Restaure o serviço quando não precisar mais da alteração.");
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_service = false; }
+                    if ui.add_enabled(self.receiver.is_none() && self.service_selected.is_some(), egui::Button::new("Salvar e parar")).clicked() {
+                        self.confirm_service = false;
+                        if let Some(service) = self.service_selected { self.status = "Salvando backup e parando serviço...".into(); self.run(&ctx, move || JobResult::ServicesChanged(service_stop(service))); }
                     }
                 });
             });
@@ -965,6 +1072,88 @@ pub(crate) fn restore_system() -> Result<String, String> {
             report.restored.len()
         ))
     })
+}
+
+#[cfg(windows)]
+fn services_list() -> Result<ServiceSnapshot, String> {
+    use windows_fps_optimizer::{
+        services::Store as ServicesStore, windows_services::inventory_with_timeout,
+    };
+    let backed_up = {
+        let mut store = FileStore::acquire(engine::state_directory()?)?;
+        match store.load_services()? {
+            Some(journal) => {
+                services::validate(&journal)?;
+                journal.entries
+            }
+            None => Vec::new(),
+        }
+    };
+    let items = inventory_with_timeout(Duration::from_secs(8))?;
+    Ok(ServiceSnapshot { items, backed_up })
+}
+#[cfg(windows)]
+fn service_stop(service: Service) -> Result<String, String> {
+    use windows_fps_optimizer::{services::StopResult, windows_services::WindowsServices};
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    match services::stop(&mut WindowsServices, &mut store, service)? {
+        StopResult::Stopped => Ok(format!(
+            "{} parado; o estado anterior foi salvo. Atualize a lista para restaurar.",
+            service.title()
+        )),
+        StopResult::AlreadyStopped => {
+            Ok("O serviço já estava parado; nenhuma mudança foi feita.".into())
+        }
+    }
+}
+#[cfg(windows)]
+fn service_restore(service: Service) -> Result<String, String> {
+    use windows_fps_optimizer::{services::RestoreResult, windows_services::WindowsServices};
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    match services::restore(&mut WindowsServices, &mut store, service)? {
+        RestoreResult::Started => Ok(format!("{} restaurado. Atualize a lista.", service.title())),
+        RestoreResult::AlreadyRunning => {
+            Ok("O serviço já estava em execução; o backup foi finalizado.".into())
+        }
+        RestoreResult::Conflict => {
+            Err("O estado do serviço está incerto; o serviço e o backup foram preservados.".into())
+        }
+    }
+}
+#[cfg(windows)]
+fn services_archive() -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    let path = store.archive_services()?;
+    Ok(format!(
+        "Backups de serviços arquivados em {}. Os serviços atuais foram preservados.",
+        path.display()
+    ))
+}
+#[cfg(windows)]
+fn services_activate(path: PathBuf) -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    store.activate_services(&path)?;
+    Ok("Backup de serviços reativado. Atualize a lista para restaurar os itens.".into())
+}
+#[cfg(not(windows))]
+fn services_list() -> Result<ServiceSnapshot, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn service_stop(_: Service) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn service_restore(_: Service) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn services_archive() -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn services_activate(_: PathBuf) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
 }
 
 #[cfg(windows)]

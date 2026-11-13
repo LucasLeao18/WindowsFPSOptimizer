@@ -8,6 +8,8 @@ Na interface avançada, a limpeza de temporários é uma ação manual: analisa 
 
 A interface avançada também permite revisar e desativar individualmente entradas de inicialização da chave `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. O comando selecionado é exibido antes da confirmação, o valor é salvo e a alteração utiliza uma transação do Registro. Entradas protegidas e conflitos não são alterados; backups arquivados podem ser reativados a partir do histórico. Outras origens, incluindo entradas de máquina e atalhos na pasta de inicialização, ainda não foram portadas.
 
+Serviços opcionais podem ser consultados e parados individualmente após confirmação, com aviso de impacto e registro para restauração. A operação não muda o tipo de inicialização, pode exigir executar o aplicativo como administrador e não é acionada automaticamente pelos perfis. O gerenciamento de configurações permanentes de serviços ainda não foi portado.
+
 A interface tenta OpenGL e, se a inicialização falhar antes de o aplicativo abrir, tenta um segundo renderizador. Se nenhum estiver disponível, abre uma interface nativa de compatibilidade com os três perfis, a recuperação de backups e a limpeza opcional de temporários; as demais ferramentas avançadas ainda exigem a interface completa. A disponibilidade depende do Windows, dos drivers e do ambiente gráfico; acesso remoto e máquinas virtuais também precisam de validação.
 
 Com Rust e uma toolchain de link para Windows instalados:

@@ -68,6 +68,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --target ${{ matrix.target }} disposable_power_session_round_trip -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --target ${{ matrix.target }} --example service_fixture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:WFO_TEST_SERVICE_EXE = (Resolve-Path "target\${{ matrix.target }}\debug\examples\service_fixture.exe").Path
+          cargo test --locked --target ${{ matrix.target }} disposable_service_round_trip -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check runtime DLL dependencies
