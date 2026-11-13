@@ -1,5 +1,6 @@
 //! Durable journal with a process-wide lock and exclusive creation.
 use crate::{
+    pagefile_transaction::{Journal as PagefileJournal, Store as PagefileStore},
     power_session::{Journal as PowerJournal, Store as PowerStore},
     services::{Journal as ServicesJournal, Store as ServicesStore},
     session::{SessionJournal, SessionStore},
@@ -22,6 +23,7 @@ pub struct FileStore {
     startup_file: PathBuf,
     visual_session_file: PathBuf,
     services_file: PathBuf,
+    pagefile_file: PathBuf,
     _lock: File,
 }
 
@@ -45,6 +47,7 @@ impl FileStore {
             startup_file: directory.join("startup.json"),
             visual_session_file: directory.join("visual-session.json"),
             services_file: directory.join("services.json"),
+            pagefile_file: directory.join("pagefile.json"),
             _lock: lock,
         })
     }
@@ -95,6 +98,39 @@ impl FileStore {
     }
     pub fn archive_services(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.services_file, "services", 65_536)
+    }
+    pub fn archive_pagefile(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.pagefile_file, "pagefile", 65_536)
+    }
+    pub fn activate_pagefile(&mut self, selected: &std::path::Path) -> Result<(), String> {
+        if self.load_pagefile()?.is_some() {
+            return Err("Já existe um backup de memória virtual ativo.".into());
+        }
+        let history = self
+            .pagefile_file
+            .parent()
+            .ok_or("Pasta de backup inválida.")?
+            .join("History");
+        let history =
+            fs::canonicalize(history).map_err(|e| format!("Histórico indisponível: {e}"))?;
+        let selected =
+            fs::canonicalize(selected).map_err(|e| format!("Backup indisponível: {e}"))?;
+        if selected.parent() != Some(history.as_path()) {
+            return Err("Selecione um arquivo diretamente do histórico deste aplicativo.".into());
+        }
+        let file =
+            File::open(selected).map_err(|e| format!("Não foi possível abrir o backup: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de memória virtual é grande demais.".into());
+        }
+        let journal: PagefileJournal = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Backup de memória virtual inválido: {e}"))?;
+        crate::pagefile_transaction::validate(&journal)?;
+        self.save_pagefile(&journal)
     }
     pub fn activate_services(&mut self, selected: &std::path::Path) -> Result<(), String> {
         if self.load_services()?.is_some() {
@@ -283,6 +319,72 @@ impl Store for VisualSessionStore<'_> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
                 "Não foi possível finalizar o backup visual da sessão: {error}"
+            )),
+        }
+    }
+}
+
+impl PagefileStore for FileStore {
+    fn load_pagefile(&mut self) -> Result<Option<PagefileJournal>, String> {
+        let file = match File::open(&self.pagefile_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o backup de memória virtual: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de memória virtual é grande demais.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Backup de memória virtual inválido: {e}"))
+    }
+    fn save_pagefile(&mut self, journal: &PagefileJournal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de memória virtual é grande demais.".into());
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.pagefile_file)
+            .map_err(|e| format!("Não foi possível criar o backup de memória virtual: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.pagefile_file);
+            return Err(format!(
+                "Não foi possível salvar o backup de memória virtual: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update_pagefile(
+        &mut self,
+        old: &PagefileJournal,
+        new: &PagefileJournal,
+    ) -> Result<(), String> {
+        if self.load_pagefile()?.as_ref() != Some(old) {
+            return Err("O backup de memória virtual mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de memória virtual é grande demais.".into());
+        }
+        replace_record(&self.pagefile_file, &bytes)
+    }
+    fn clear_pagefile(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.pagefile_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o backup de memória virtual: {error}"
             )),
         }
     }

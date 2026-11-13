@@ -5,6 +5,7 @@ pub mod compatibility;
 pub mod diagnostics;
 pub mod engine;
 pub mod pagefile;
+pub mod pagefile_transaction;
 #[cfg(windows)]
 pub mod process_control;
 #[cfg(not(windows))]
