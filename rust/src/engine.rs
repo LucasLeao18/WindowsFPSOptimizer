@@ -31,10 +31,14 @@ pub fn preview<B: Backend, S: Store>(
         return Err(capabilities.reason.into());
     }
     match preset {
-        Preset::Safe => {},
-        Preset::Balanced if pagefile == Some(Management::Automatic) => {},
-        Preset::Balanced => return Err("O perfil Equilibrado requer memória virtual gerenciada pelo Windows. Configure-a nas opções avançadas do sistema ou use o perfil Seguro. Nenhuma configuração foi alterada.".into()),
-        Preset::MaximumFps => return Err("A sessão de jogo ainda não está disponível na versão Rust em desenvolvimento.".into()),
+        Preset::Safe => {}
+        Preset::Balanced => {}
+        Preset::MaximumFps => {
+            return Err(
+                "A sessão de jogo ainda não está disponível na versão Rust em desenvolvimento."
+                    .into(),
+            );
+        }
     }
     let mut notes = vec![capabilities.reason.to_string()];
     let mut journal = Journal {
@@ -54,7 +58,11 @@ pub fn preview<B: Backend, S: Store>(
         }
     }
     if preset == Preset::Balanced {
-        notes.push("Memória virtual: já gerenciada pelo Windows; nenhuma alteração de paginação é necessária.".into());
+        notes.push(match pagefile {
+            Some(Management::Automatic) => "Memória virtual: gerenciada pelo Windows; nenhuma alteração de paginação será feita.",
+            Some(Management::Manual) => "Memória virtual: configuração manual detectada. Ela não será alterada; revise-a nas opções avançadas do Windows se desejar.",
+            None => "Memória virtual: não foi possível consultar a configuração. Ela não será alterada; os demais ajustes disponíveis podem ser aplicados.",
+        }.into());
     }
     if !capabilities.game_mode_automatic {
         notes.push("Modo de Jogo: configure manualmente no Windows.".into());
@@ -76,16 +84,13 @@ pub fn apply<B: Backend, S: Store>(
     store: &mut S,
     current: WindowsVersion,
     preview: &Preview,
-    pagefile: Option<Management>,
+    _pagefile: Option<Management>,
 ) -> Result<(), String> {
     if preview.platform != current {
         return Err("A versão do Windows mudou desde a análise. Faça uma nova análise.".into());
     }
     let capabilities = classify(Some(current));
-    if !capabilities.supported
-        || preview.preset == Preset::MaximumFps
-        || (preview.preset == Preset::Balanced && pagefile != Some(Management::Automatic))
-    {
+    if !capabilities.supported || preview.preset == Preset::MaximumFps {
         return Err("Este perfil não é compatível.".into());
     }
     let allowed = conservative_changes(&capabilities);
@@ -194,7 +199,7 @@ mod tests {
         assert!(backend.0.is_empty());
     }
     #[test]
-    fn balanced_rechecks_automatic_pagefile_before_writing() {
+    fn balanced_remains_available_without_changing_pagefile() {
         let mut backend = Fake::default();
         let mut store = Memory::default();
         let version = WindowsVersion {
@@ -202,43 +207,29 @@ mod tests {
             build: 22621,
             workstation: true,
         };
-        assert!(
-            preview(
-                &mut backend,
-                &mut store,
-                version,
-                Preset::Balanced,
-                Some(Management::Manual)
-            )
-            .is_err()
-        );
         let view = preview(
             &mut backend,
             &mut store,
             version,
             Preset::Balanced,
-            Some(Management::Automatic),
+            Some(Management::Manual),
         )
         .unwrap();
         assert!(
-            apply(
-                &mut backend,
-                &mut store,
-                version,
-                &view,
-                Some(Management::Manual)
-            )
-            .is_err()
+            view.notes
+                .iter()
+                .any(|note| note.contains("manual") && note.contains("não será alterada"))
         );
         assert!(backend.0.is_empty() && store.0.is_none());
-        apply(
-            &mut backend,
-            &mut store,
-            version,
-            &view,
-            Some(Management::Automatic),
-        )
-        .unwrap();
+        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        restore(&mut backend, &mut store).unwrap();
+        let unknown = preview(&mut backend, &mut store, version, Preset::Balanced, None).unwrap();
+        assert!(
+            unknown
+                .notes
+                .iter()
+                .any(|note| note.contains("não foi possível consultar"))
+        );
     }
     #[test]
     fn visual_settings_are_backed_up_and_restored() {

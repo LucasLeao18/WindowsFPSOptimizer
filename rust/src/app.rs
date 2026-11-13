@@ -387,7 +387,7 @@ impl eframe::App for App {
                 ui.add_space(12.0);
                 ui.label(match self.preset {
                     Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
-                    Preset::Balanced => "Inclui os ajustes do perfil Seguro quando a memória virtual já é gerenciada pelo Windows. Se estiver manual, revise-a nas opções avançadas do sistema.",
+                    Preset::Balanced => "Revisa os ajustes disponíveis do perfil Seguro e consulta a memória virtual. A configuração de memória virtual não é alterada nesta versão.",
                     Preset::MaximumFps => "Inicia o jogo, tenta elevar sua prioridade, usar o plano Alto Desempenho disponível e impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores podem ser restaurados sem fechar o jogo.",
                 });
                 if self.preset == Preset::Balanced {
@@ -728,9 +728,7 @@ fn with_system<T>(
 pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
     let version = compatibility::detect()?;
     let pagefile = if preset == Preset::Balanced {
-        Some(windows_fps_optimizer::pagefile::detect_with_timeout(
-            Duration::from_secs(8),
-        )?)
+        windows_fps_optimizer::pagefile::detect_with_timeout(Duration::from_secs(8)).ok()
     } else {
         None
     };
@@ -758,14 +756,7 @@ fn legacy_backups_present() -> bool {
 #[cfg(windows)]
 pub(crate) fn apply_system(preview: Preview) -> Result<(), String> {
     let version = compatibility::detect()?;
-    let pagefile = if preview.preset == Preset::Balanced {
-        Some(windows_fps_optimizer::pagefile::detect_with_timeout(
-            Duration::from_secs(8),
-        )?)
-    } else {
-        None
-    };
-    with_system(|backend, store| engine::apply(backend, store, version, &preview, pagefile))
+    with_system(|backend, store| engine::apply(backend, store, version, &preview, None))
 }
 #[cfg(windows)]
 pub(crate) fn restore_system() -> Result<String, String> {
