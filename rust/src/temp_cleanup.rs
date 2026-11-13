@@ -330,25 +330,35 @@ mod tests {
         fs::write(root.join("old"), b"abc").unwrap();
         fs::write(root.join("changed"), b"first").unwrap();
         fs::write(root.join("in-use"), b"locked").unwrap();
+        fs::write(root.join("replaced"), b"same").unwrap();
         fs::write(root.join("nested").join("keep"), b"keep").unwrap();
+        let linked =
+            std::os::windows::fs::symlink_file(root.join("nested").join("keep"), root.join("link"))
+                .is_ok();
         let plan = plan_at(
             &root,
             Duration::ZERO,
             SystemTime::now() + Duration::from_secs(1),
         )
         .unwrap();
-        assert_eq!(plan.files(), 3);
+        assert_eq!(plan.files(), 4);
         let _busy = fs::OpenOptions::new()
             .write(true)
             .open(root.join("in-use"))
             .unwrap();
         fs::write(root.join("changed"), b"changed after preview").unwrap();
+        fs::remove_file(root.join("replaced")).unwrap();
+        fs::write(root.join("replaced"), b"same").unwrap();
         fs::write(root.join("new"), b"new").unwrap();
         let report = apply(&plan).unwrap();
         assert_eq!(report.marked, 1);
-        assert_eq!(report.skipped, 2);
+        assert_eq!(report.skipped, 3);
         assert!(!root.join("old").exists());
         assert!(root.join("in-use").exists());
+        assert!(root.join("replaced").exists());
+        if linked {
+            assert!(root.join("link").exists());
+        }
         drop(_busy);
         assert!(
             root.join("changed").exists()
