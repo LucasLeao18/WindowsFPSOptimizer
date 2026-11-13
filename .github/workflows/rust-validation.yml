@@ -147,3 +147,59 @@ jobs:
           path: rust/target/${{ matrix.target }}/release/windows-fps-optimizer.exe
           if-no-files-found: ignore
           retention-days: 1
+
+  package-preview:
+    if: github.event_name == 'workflow_dispatch'
+    needs: windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Download validated 64-bit build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: diagnostic-windows-2022-x86_64-pc-windows-msvc
+          path: preview-input/x64
+      - name: Download validated 32-bit build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: diagnostic-windows-2022-i686-pc-windows-msvc
+          path: preview-input/x86
+      - name: Download validated ARM64 build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: diagnostic-windows-11-arm-aarch64-pc-windows-msvc
+          path: preview-input/arm64
+      - name: Assemble preview and checksums
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path preview -Force | Out-Null
+          $binaries = [ordered]@{
+            'WindowsFPSOptimizer-Rust-x64-preview.exe' = 'preview-input/x64/windows-fps-optimizer.exe'
+            'WindowsFPSOptimizer-Rust-x86-preview.exe' = 'preview-input/x86/windows-fps-optimizer.exe'
+            'WindowsFPSOptimizer-Rust-arm64-preview.exe' = 'preview-input/arm64/windows-fps-optimizer.exe'
+          }
+          foreach ($name in $binaries.Keys) {
+            if (-not (Test-Path -LiteralPath $binaries[$name] -PathType Leaf)) { throw "Validated executable missing: $name" }
+            Copy-Item -LiteralPath $binaries[$name] -Destination (Join-Path preview $name)
+            if ((Get-FileHash -LiteralPath $binaries[$name] -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path preview $name) -Algorithm SHA256).Hash) { throw "Copy verification failed: $name" }
+          }
+          [ordered]@{
+            Status = 'Development preview; not a final release'
+            SourceCommit = $env:GITHUB_SHA
+            Repository = $env:GITHUB_REPOSITORY
+            ValidationRun = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            Builds = @('Windows 64-bit', 'Windows 32-bit', 'Windows ARM64')
+          } | ConvertTo-Json | Set-Content -LiteralPath preview/BuildInfo.json -Encoding utf8NoBOM
+          Get-ChildItem -LiteralPath preview -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content -LiteralPath preview/SHA256SUMS.txt -Encoding ascii
+      - name: Upload development preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-development-preview
+          path: preview/*
+          if-no-files-found: error
+          retention-days: 7
