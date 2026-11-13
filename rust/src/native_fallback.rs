@@ -14,7 +14,7 @@ use windows_fps_optimizer::{
     temp_cleanup::{self, Plan as CleanupPlan, Report as CleanupReport},
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow},
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::*,
@@ -69,6 +69,12 @@ fn child(
     rect: [i32; 4],
     id: usize,
 ) -> Result<HWND, String> {
+    let style = style
+        | if class == "BUTTON" {
+            BS_MULTILINE as u32
+        } else {
+            0
+        };
     let hwnd = unsafe {
         CreateWindowExW(
             0,
@@ -118,7 +124,7 @@ fn confirm(owner: HWND, question: &str) -> bool {
             owner,
             wide(question).as_ptr(),
             wide("Confirmar").as_ptr(),
-            MB_YESNO | MB_ICONQUESTION,
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
         ) == IDYES
     }
 }
@@ -137,6 +143,39 @@ fn start(work: impl FnOnce() -> Finished + Send + 'static) -> mpsc::Receiver<Fin
         let _ = tx.send(work());
     });
     rx
+}
+
+struct Flow {
+    width: i32,
+    x: i32,
+    y: i32,
+}
+impl Flow {
+    fn new(width: i32) -> Self {
+        Self {
+            width: width.max(160),
+            x: 12,
+            y: 42,
+        }
+    }
+    fn place(&mut self, wanted: i32) -> [i32; 4] {
+        let max_width = if self.width < 480 {
+            (self.width - 32) / 2
+        } else {
+            self.width - 24
+        };
+        let width = wanted.min(max_width).max(1);
+        if self.x + width > self.width - 12 {
+            self.x = 12;
+            self.y += 38;
+        }
+        let result = [self.x, self.y, width, 30];
+        self.x += width + 8;
+        result
+    }
+    fn next_y(&self) -> i32 {
+        self.y + 42
+    }
 }
 
 pub fn run(smoke: bool) -> Result<(), String> {
@@ -163,16 +202,32 @@ pub fn run(smoke: bool) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
+    let mut work = RECT::default();
+    if unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0) } == 0
+        || work.right <= work.left
+        || work.bottom <= work.top
+    {
+        work = RECT {
+            left: 0,
+            top: 0,
+            right: 1024,
+            bottom: 768,
+        };
+    }
+    let width = (work.right - work.left - 16).clamp(320, 780);
+    let height = (work.bottom - work.top - 16).clamp(320, 610);
+    let x = work.left + ((work.right - work.left - width) / 2).max(0);
+    let y = work.top + ((work.bottom - work.top - height) / 2).max(0);
     let window = unsafe {
         CreateWindowExW(
             0,
             class_name.as_ptr(),
             wide("Windows FPS Optimizer — modo de compatibilidade").as_ptr(),
             WS_OVERLAPPEDWINDOW & !WS_MAXIMIZEBOX & !WS_THICKFRAME,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            900,
-            680,
+            x,
+            y,
+            width,
+            height,
             ptr::null_mut(),
             ptr::null_mut(),
             instance,
@@ -185,21 +240,33 @@ pub fn run(smoke: bool) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(window, &mut client) } == 0 {
+        unsafe {
+            DestroyWindow(window);
+        }
+        return Err("Não foi possível determinar o tamanho da janela.".into());
+    }
     let setup = (|| -> Result<(HWND, HWND), String> {
+        let client_width = client.right - client.left;
+        let client_height = client.bottom - client.top;
+        let mut flow = Flow::new(client_width);
         child(
             window,
             "STATIC",
             "Modo de compatibilidade: escolha um perfil, analise e confirme antes de aplicar.",
             0,
-            [20, 18, 840, 24],
+            [12, 10, (client_width - 24).max(1), 24],
             0,
         )?;
+        let mut combo_rect = flow.place(200);
+        combo_rect[3] = 200;
         let combo = child(
             window,
             "COMBOBOX",
             "",
             CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP,
-            [20, 52, 230, 200],
+            combo_rect,
             COMBO,
         )?;
         for label in ["Seguro", "Equilibrado", "Máximo FPS"] {
@@ -215,7 +282,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Analisar",
             WS_TABSTOP,
-            [265, 50, 130, 30],
+            flow.place(105),
             ANALYZE,
         )?;
         child(
@@ -223,7 +290,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Aplicar / iniciar",
             WS_TABSTOP,
-            [405, 50, 145, 30],
+            flow.place(135),
             APPLY,
         )?;
         child(
@@ -231,7 +298,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Restaurar backup",
             WS_TABSTOP,
-            [560, 50, 150, 30],
+            flow.place(145),
             RESTORE,
         )?;
         child(
@@ -239,7 +306,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Selecionar jogo (.exe)",
             WS_TABSTOP,
-            [20, 92, 190, 30],
+            flow.place(185),
             SELECT_GAME,
         )?;
         child(
@@ -247,7 +314,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Restaurar sessão",
             WS_TABSTOP,
-            [220, 92, 230, 30],
+            flow.place(160),
             END_SESSION,
         )?;
         child(
@@ -255,7 +322,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Arquivar backup",
             WS_TABSTOP,
-            [20, 132, 170, 30],
+            flow.place(150),
             ARCHIVE_BACKUP,
         )?;
         child(
@@ -263,7 +330,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Reativar backup arquivado",
             WS_TABSTOP,
-            [200, 132, 210, 30],
+            flow.place(200),
             ACTIVATE_BACKUP,
         )?;
         child(
@@ -271,7 +338,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Arquivar sessão",
             WS_TABSTOP,
-            [420, 132, 160, 30],
+            flow.place(150),
             ARCHIVE_SESSION,
         )?;
         child(
@@ -279,7 +346,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Reativar visual da sessão",
             WS_TABSTOP,
-            [590, 132, 250, 30],
+            flow.place(215),
             ACTIVATE_VISUAL,
         )?;
         child(
@@ -287,7 +354,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Analisar temporários",
             WS_TABSTOP,
-            [20, 172, 190, 30],
+            flow.place(185),
             ANALYZE_TEMP,
         )?;
         child(
@@ -295,9 +362,10 @@ pub fn run(smoke: bool) -> Result<(), String> {
             "BUTTON",
             "Remover temporários analisados",
             WS_TABSTOP,
-            [220, 172, 260, 30],
+            flow.place(240),
             CLEAN_TEMP,
         )?;
+        let output_top = flow.next_y();
         let output = child(
             window,
             "EDIT",
@@ -307,7 +375,12 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 | ES_MULTILINE as u32
                 | ES_READONLY as u32
                 | ES_AUTOVSCROLL as u32,
-            [20, 212, 840, 378],
+            [
+                12,
+                output_top,
+                (client_width - 24).max(1),
+                (client_height - output_top - 12).max(60),
+            ],
             0,
         )?;
         Ok((combo, output))
@@ -623,4 +696,20 @@ pub fn run(smoke: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::Flow;
+    #[test]
+    fn controls_wrap_inside_narrow_and_wide_windows() {
+        for width in [320, 480, 640, 760] {
+            let mut flow = Flow::new(width);
+            for wanted in [200, 105, 135, 145, 185, 160, 150, 200, 150, 215, 185, 240] {
+                let [x, y, w, h] = flow.place(wanted);
+                assert!(x >= 12 && x + w <= width - 12 && y >= 42 && h == 30);
+            }
+            assert!(flow.next_y() < 300);
+        }
+    }
 }
