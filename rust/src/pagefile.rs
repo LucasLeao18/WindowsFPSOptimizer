@@ -151,6 +151,88 @@ mod tests {
     #[ignore = "Changes paging configuration; run only on a disposable administrator runner"]
     fn disposable_pagefile_provider_observation() {
         assert_eq!(std::env::var("WFO_DISPOSABLE_RUNNER").as_deref(), Ok("1"));
+        // The runner is disposable; enable only this process's pagefile privilege
+        // and return the token to its original state before the test exits.
+        struct Privilege {
+            token: windows_sys::Win32::Foundation::HANDLE,
+            previous: windows_sys::Win32::Security::TOKEN_PRIVILEGES,
+        }
+        impl Privilege {
+            fn enable() -> Result<Self, String> {
+                use windows_sys::Win32::{Foundation::*, Security::*, System::Threading::*};
+                let mut token = std::ptr::null_mut();
+                if unsafe {
+                    OpenProcessToken(
+                        GetCurrentProcess(),
+                        TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                        &mut token,
+                    )
+                } == 0
+                {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                let mut luid = LUID::default();
+                let name: Vec<u16> = "SeCreatePagefilePrivilege"
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                if unsafe { LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) } == 0
+                {
+                    let error = std::io::Error::last_os_error().to_string();
+                    unsafe {
+                        CloseHandle(token);
+                    }
+                    return Err(error);
+                }
+                let requested = TOKEN_PRIVILEGES {
+                    PrivilegeCount: 1,
+                    Privileges: [LUID_AND_ATTRIBUTES {
+                        Luid: luid,
+                        Attributes: SE_PRIVILEGE_ENABLED,
+                    }],
+                };
+                let mut previous = TOKEN_PRIVILEGES::default();
+                let mut returned = 0;
+                unsafe {
+                    SetLastError(0);
+                }
+                let success = unsafe {
+                    AdjustTokenPrivileges(
+                        token,
+                        0,
+                        &requested,
+                        std::mem::size_of::<TOKEN_PRIVILEGES>() as u32,
+                        &mut previous,
+                        &mut returned,
+                    )
+                };
+                let status = unsafe { GetLastError() };
+                if success == 0 || status != 0 {
+                    unsafe {
+                        CloseHandle(token);
+                    }
+                    return Err(format!("Could not enable pagefile privilege: {status}"));
+                }
+                Ok(Self { token, previous })
+            }
+        }
+        impl Drop for Privilege {
+            fn drop(&mut self) {
+                unsafe {
+                    windows_sys::Win32::Security::AdjustTokenPrivileges(
+                        self.token,
+                        0,
+                        &self.previous,
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    );
+                    windows_sys::Win32::Foundation::CloseHandle(self.token);
+                }
+            }
+        }
+        let _privilege =
+            Privilege::enable().expect("Pagefile privilege unavailable on disposable runner");
         #[derive(serde::Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
         #[serde(rename_all = "PascalCase")]
         struct Setting {
