@@ -19,6 +19,7 @@ pub struct FileStore {
     session_file: PathBuf,
     power_file: PathBuf,
     startup_file: PathBuf,
+    visual_session_file: PathBuf,
     _lock: File,
 }
 
@@ -40,6 +41,7 @@ impl FileStore {
             session_file: directory.join("session.json"),
             power_file: directory.join("power-session.json"),
             startup_file: directory.join("startup.json"),
+            visual_session_file: directory.join("visual-session.json"),
             _lock: lock,
         })
     }
@@ -51,6 +53,9 @@ impl FileStore {
     }
     pub fn archive_power(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.power_file, "power-session", 65_536)
+    }
+    pub fn visual_session(&mut self) -> VisualSessionStore<'_> {
+        VisualSessionStore { owner: self }
     }
     pub fn archive_startup(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.startup_file, "startup", MAX_STARTUP_BYTES)
@@ -89,6 +94,17 @@ impl FileStore {
     /// Archive raw records even if damaged, so recovery is not blocked by parsing.
     pub fn archive_session_records(&mut self) -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
+        if self
+            .visual_session_file
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            paths.push(archive_record(
+                &self.visual_session_file,
+                "visual-session",
+                MAX_JOURNAL_BYTES,
+            )?);
+        }
         if self.power_file.try_exists().map_err(|e| e.to_string())? {
             paths.push(self.archive_power()?);
         }
@@ -138,6 +154,71 @@ impl FileStore {
             serde_json::from_slice(&bytes).map_err(|e| format!("Backup inválido: {e}"))?;
         crate::transaction::validate(&journal)?;
         Store::save(self, &journal)
+    }
+}
+
+pub struct VisualSessionStore<'a> {
+    owner: &'a mut FileStore,
+}
+impl Store for VisualSessionStore<'_> {
+    fn load(&mut self) -> Result<Option<Journal>, String> {
+        let file = match File::open(&self.owner.visual_session_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o backup visual da sessão: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_JOURNAL_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("O backup visual da sessão é grande demais.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Backup visual da sessão inválido: {e}"))
+    }
+    fn save(&mut self, journal: &Journal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("O backup visual da sessão é grande demais.".into());
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.owner.visual_session_file)
+            .map_err(|e| format!("Não foi possível criar o backup visual da sessão: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.owner.visual_session_file);
+            return Err(format!(
+                "Não foi possível salvar o backup visual da sessão: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update(&mut self, old: &Journal, new: &Journal) -> Result<(), String> {
+        if self.load()?.as_ref() != Some(old) {
+            return Err("O backup visual da sessão mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("O backup visual da sessão é grande demais.".into());
+        }
+        replace_record(&self.owner.visual_session_file, &bytes)
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.owner.visual_session_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o backup visual da sessão: {error}"
+            )),
+        }
     }
 }
 

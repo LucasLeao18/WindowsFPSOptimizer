@@ -370,7 +370,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 ANALYZE => match selected(combo) {
                     Some(Preset::MaximumFps) => set_text(
                         output,
-                        "Máximo FPS tenta ajustar a prioridade, usar o plano Alto Desempenho existente e impedir a suspensão. O plano pode aumentar consumo e temperatura. Selecione o jogo e confirme em Aplicar / iniciar.",
+                        "Máximo FPS tenta ajustar a prioridade, reduzir efeitos visuais, usar o plano Alto Desempenho existente e impedir a suspensão. O plano pode aumentar consumo e temperatura. Selecione o jogo e confirme em Aplicar / iniciar.",
                     ),
                     Some(preset) => {
                         preview = None;
@@ -386,7 +386,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                         if let Some(path) = game.clone() {
                             if confirm(
                                 window,
-                                "Iniciar o jogo e tentar ajustar sua prioridade, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Um monitor discreto tentará restaurar a sessão quando o jogo terminar.",
+                                "Iniciar o jogo e tentar ajustar a prioridade, reduzir efeitos visuais, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Um monitor tentará restaurar a sessão quando o jogo terminar.",
                             ) {
                                 set_text(output, "Iniciando o jogo...");
                                 pending = Some(start(move || {
@@ -447,7 +447,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 ARCHIVE_SESSION
                     if confirm(
                         window,
-                        "Manter o plano de energia e a prioridade atuais e arquivar os registros? Eles não serão restaurados automaticamente.",
+                        "Manter os efeitos visuais, o plano de energia e a prioridade atuais e arquivar os registros? Eles não serão restaurados automaticamente.",
                     ) =>
                 {
                     set_text(output, "Arquivando sessão...");

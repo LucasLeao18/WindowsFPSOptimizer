@@ -118,6 +118,7 @@ pub mod temp_cleanup;
 #[cfg(not(windows))]
 #[path = "temp_cleanup_stub.rs"]
 pub mod temp_cleanup;
+pub mod visual_session;
 #[cfg(windows)]
 pub mod windows_power;
 #[cfg(windows)]

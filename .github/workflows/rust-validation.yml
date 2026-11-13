@@ -62,6 +62,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --target ${{ matrix.target }} disposable_visual_profile_round_trip -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target ${{ matrix.target }} disposable_session_visual_round_trip -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --target ${{ matrix.target }} temporary_sleep_guard_checks_identity_and_stops -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --target ${{ matrix.target }} disposable_power_session_round_trip -- --ignored --nocapture

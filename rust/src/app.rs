@@ -444,7 +444,7 @@ impl eframe::App for App {
                 ui.label(match self.preset {
                     Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
                     Preset::Balanced => "Revisa os ajustes disponíveis do perfil Seguro e consulta a memória virtual. A configuração de memória virtual não é alterada nesta versão.",
-                    Preset::MaximumFps => "Inicia o jogo, tenta elevar sua prioridade, usar o plano Alto Desempenho disponível e impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores podem ser restaurados sem fechar o jogo.",
+                    Preset::MaximumFps => "Inicia o jogo e tenta ajustar prioridade, efeitos visuais e plano Alto Desempenho, além de impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores são salvos para restauração.",
                 });
                 if self.preset == Preset::Balanced {
                     ui.label("Se necessário: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual > Alterar, e escolha o gerenciamento automático. A mudança pode exigir administrador e reinicialização.");
@@ -693,7 +693,7 @@ impl eframe::App for App {
         }
         if self.confirm_session {
             egui::Window::new("Iniciar sessão do jogo").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("O jogo será iniciado. O aplicativo tentará ajustar a prioridade e ativar o plano Alto Desempenho existente, salvando os valores anteriores. Esse plano pode aumentar consumo e temperatura. Também tentará impedir a suspensão enquanto o jogo e o aplicativo estiverem abertos; a tela ainda poderá apagar. Um monitor discreto tentará restaurar o plano ao fim do jogo.");
+                ui.label("O jogo será iniciado. O aplicativo tentará ajustar a prioridade, reduzir efeitos visuais e ativar o plano Alto Desempenho existente, salvando os valores anteriores. Esse plano pode aumentar consumo e temperatura. Também tentará impedir a suspensão enquanto o jogo e o aplicativo estiverem abertos; a tela ainda poderá apagar. Um monitor discreto tentará restaurar a sessão ao fim do jogo.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Iniciar jogo")).clicked() {
@@ -705,10 +705,10 @@ impl eframe::App for App {
         }
         if self.confirm_archive_session {
             egui::Window::new("Arquivar registro da sessão").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("O plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente.");
+                ui.label("Os efeitos visuais, o plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_session = false; }
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter prioridade")).clicked() {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter alterações")).clicked() {
                         self.confirm_archive_session = false;
                         self.run(&ctx, || JobResult::SessionStopped(archive_session()));
                     }
@@ -879,6 +879,16 @@ fn with_system<T>(
     action(&mut WindowsRegistry::default(), &mut store)
 }
 #[cfg(windows)]
+fn ensure_no_visual_session(store: &mut FileStore) -> Result<(), String> {
+    use windows_fps_optimizer::transaction::Store;
+    if store.visual_session().load()?.is_some() {
+        return Err(
+            "Restaure ou arquive a sessão visual do jogo antes de alterar outro perfil.".into(),
+        );
+    }
+    Ok(())
+}
+#[cfg(windows)]
 pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
     let version = compatibility::detect()?;
     let pagefile = if preset == Preset::Balanced {
@@ -886,8 +896,10 @@ pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
     } else {
         None
     };
-    let mut preview =
-        with_system(|backend, store| engine::preview(backend, store, version, preset, pagefile))?;
+    let mut preview = with_system(|backend, store| {
+        ensure_no_visual_session(store)?;
+        engine::preview(backend, store, version, preset, pagefile)
+    })?;
     if legacy_backups_present() {
         preview.notes.push("Backups da versão anterior foram encontrados. Esta versão ainda não os restaura; mantenha a versão anterior para acessá-los.".into());
     }
@@ -910,11 +922,15 @@ fn legacy_backups_present() -> bool {
 #[cfg(windows)]
 pub(crate) fn apply_system(preview: Preview) -> Result<(), String> {
     let version = compatibility::detect()?;
-    with_system(|backend, store| engine::apply(backend, store, version, &preview, None))
+    with_system(|backend, store| {
+        ensure_no_visual_session(store)?;
+        engine::apply(backend, store, version, &preview, None)
+    })
 }
 #[cfg(windows)]
 pub(crate) fn restore_system() -> Result<String, String> {
     with_system(|backend, store| {
+        ensure_no_visual_session(store)?;
         let report = engine::restore(backend, store)?;
         if !report.conflicts.is_empty() || !report.errors.is_empty() {
             let conflicts = report
@@ -1030,6 +1046,8 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
     use windows_fps_optimizer::{
         power_session::{self, BeginResult, Store as PowerStore},
         session::{self, SessionStore},
+        transaction::Store,
+        visual_session,
         windows_power::WindowsPower,
         windows_process::{self, WindowsProcess},
     };
@@ -1038,7 +1056,10 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         return Err(capabilities.reason.into());
     }
     let mut store = FileStore::acquire(engine::state_directory()?)?;
-    if store.load_session()?.is_some() || store.load_power()?.is_some() {
+    if store.load_session()?.is_some()
+        || store.load_power()?.is_some()
+        || store.visual_session().load()?.is_some()
+    {
         return Err(
             "Há uma sessão anterior. Restaure sua prioridade antes de iniciar outra.".into(),
         );
@@ -1051,6 +1072,19 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
     } else {
         "A prioridade original foi salva."
     };
+    let visual =
+        match visual_session::begin(&mut WindowsRegistry::default(), &mut store.visual_session()) {
+            Ok(notes) if notes.is_empty() => {
+                "Ajustes visuais disponíveis aplicados temporariamente.".to_string()
+            }
+            Ok(notes) => format!(
+                "Alguns ajustes visuais não estavam disponíveis: {}",
+                notes.join("; ")
+            ),
+            Err(error) => format!(
+                "Ajustes visuais não foram concluídos: {error}. Revise os registros da sessão."
+            ),
+        };
     let power = match power_session::begin(&mut WindowsPower, &mut store, process) {
         Ok(BeginResult::Applied) => {
             "Plano Alto Desempenho ativado; o plano anterior foi salvo.".to_string()
@@ -1076,7 +1110,7 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         ),
     };
     Ok(format!(
-        "Jogo iniciado. {priority_message} Use Restaurar sessão para encerrá-la sem fechar o jogo. {power} {sleep} {monitor}"
+        "Jogo iniciado. {priority_message} Use Restaurar sessão para encerrá-la sem fechar o jogo. {visual} {power} {sleep} {monitor}"
     ))
 }
 
@@ -1085,12 +1119,23 @@ pub(crate) fn stop_session() -> Result<String, String> {
     use windows_fps_optimizer::{
         power_session::{self, EndResult as PowerEnd, Store as PowerStore},
         session::{self, EndResult as PriorityEnd, SessionStore},
+        transaction::Store,
+        visual_session,
         windows_power::WindowsPower,
         windows_process::WindowsProcess,
     };
     crate::sleep_guard::stop();
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let mut messages = Vec::new();
+    match store.visual_session().load() {
+        Ok(Some(_)) => messages.push(match visual_session::end(&mut WindowsRegistry::default(), &mut store.visual_session()) {
+            Ok(report) if report.conflicts.is_empty() && report.errors.is_empty() => "Efeitos visuais anteriores restaurados.".into(),
+            Ok(_) => "Alguns efeitos visuais estão em conflito ou não puderam ser restaurados; backup preservado.".into(),
+            Err(error) => format!("Efeitos visuais: {error}"),
+        }),
+        Err(error) => messages.push(format!("Efeitos visuais: {error}")),
+        Ok(None) => {}
+    }
     match store.load_power() {
         Ok(Some(_)) => messages.push(match power_session::end(&mut WindowsPower, &mut store) {
             Ok(PowerEnd::Restored) => "Plano de energia anterior restaurado.".into(),
@@ -1121,7 +1166,7 @@ pub(crate) fn stop_session() -> Result<String, String> {
         return Err("Não há sessão de jogo para restaurar.".into());
     }
     Ok(format!(
-        "{} O jogo permanece aberto. Conflitos ou erros preservam os registros para revisão.",
+        "{} Esta ação não fecha o jogo. Conflitos ou erros preservam os registros para revisão.",
         messages.join(" ")
     ))
 }
@@ -1131,21 +1176,38 @@ pub(crate) fn check_session() -> Result<SessionCheck, String> {
     use windows_fps_optimizer::{
         power_session::{self, EndResult as PowerEnd, Store as PowerStore},
         session::{self, ProcessBackend, SessionStore},
+        transaction::Store,
+        visual_session,
         windows_power::WindowsPower,
         windows_process::WindowsProcess,
     };
     let mut store = FileStore::acquire(engine::state_directory()?)?;
-    let priority = store.load_session()?;
-    let power = store.load_power()?;
+    let priority = store.load_session();
+    let power = store.load_power();
+    let visual = store.visual_session().load();
     let Some(process) = priority
         .as_ref()
-        .map(|record| record.process)
-        .or_else(|| power.as_ref().map(|record| record.process))
+        .ok()
+        .and_then(|record| record.as_ref().map(|record| record.process))
+        .or_else(|| {
+            power
+                .as_ref()
+                .ok()
+                .and_then(|record| record.as_ref().map(|record| record.process))
+        })
     else {
+        if !matches!(visual, Ok(None)) || priority.is_err() || power.is_err() {
+            return Err(
+                "Há registros da sessão pendentes ou inválidos; revise-os ou restaure manualmente."
+                    .into(),
+            );
+        }
         return Ok(SessionCheck::None);
     };
     if power
         .as_ref()
+        .ok()
+        .and_then(|record| record.as_ref())
         .is_some_and(|record| record.process != process)
     {
         return Err(
@@ -1153,16 +1215,44 @@ pub(crate) fn check_session() -> Result<SessionCheck, String> {
         );
     }
     if WindowsProcess.priority(process)?.is_none() {
-        if power.is_some()
-            && power_session::end(&mut WindowsPower, &mut store)? == PowerEnd::Conflict
-        {
-            return Err(
-                "O plano de energia mudou ou sua origem é incerta; o registro foi preservado."
-                    .into(),
-            );
+        let mut problems = Vec::new();
+        match visual {
+            Ok(Some(_)) => match visual_session::end(
+                &mut WindowsRegistry::default(),
+                &mut store.visual_session(),
+            ) {
+                Ok(report) if report.conflicts.is_empty() && report.errors.is_empty() => {}
+                Ok(_) => problems.push("Alguns efeitos visuais precisam de revisão.".to_string()),
+                Err(error) => problems.push(format!("Efeitos visuais: {error}")),
+            },
+            Ok(None) => {}
+            Err(error) => problems.push(format!("Efeitos visuais: {error}")),
         }
-        if priority.is_some() {
-            session::end(&mut WindowsProcess, &mut store)?;
+        if let Err(error) = &power {
+            problems.push(format!("Energia: {error}"));
+        }
+        if matches!(power, Ok(Some(_))) {
+            match power_session::end(&mut WindowsPower, &mut store) {
+                Ok(PowerEnd::Conflict) => {
+                    problems.push("O plano de energia mudou ou está incerto.".into())
+                }
+                Ok(_) => {}
+                Err(error) => problems.push(format!("Energia: {error}")),
+            }
+        }
+        if let Err(error) = &priority {
+            problems.push(format!("Prioridade: {error}"));
+        }
+        if matches!(priority, Ok(Some(_)))
+            && let Err(error) = session::end(&mut WindowsProcess, &mut store)
+        {
+            problems.push(format!("Prioridade: {error}"));
+        }
+        if !problems.is_empty() {
+            return Err(format!(
+                "{} Os registros pendentes foram preservados.",
+                problems.join(" ")
+            ));
         }
         Ok(SessionCheck::Finished)
     } else {
@@ -1176,7 +1266,7 @@ pub(crate) fn archive_session() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let paths = store.archive_session_records()?;
     Ok(format!(
-        "Registros arquivados: {}. O plano de energia e a prioridade atuais foram preservados.",
+        "Registros arquivados: {}. Os efeitos visuais, o plano de energia e a prioridade atuais foram preservados.",
         paths
             .iter()
             .map(|path| path.display().to_string())

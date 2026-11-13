@@ -19,6 +19,9 @@ pub enum Setting {
     TooltipFade,
     ComboBoxAnimations,
     SmoothListScrolling,
+    CursorShadow,
+    DropShadows,
+    UiEffects,
 }
 
 impl Setting {
@@ -34,6 +37,9 @@ impl Setting {
                 | Self::TooltipFade
                 | Self::ComboBoxAnimations
                 | Self::SmoothListScrolling
+                | Self::CursorShadow
+                | Self::DropShadows
+                | Self::UiEffects
         )
     }
     pub fn description(self) -> &'static str {
@@ -50,6 +56,9 @@ impl Setting {
             Self::TooltipFade => "Transição de dicas",
             Self::ComboBoxAnimations => "Animações de listas suspensas",
             Self::SmoothListScrolling => "Rolagem suave de listas",
+            Self::CursorShadow => "Sombra do cursor",
+            Self::DropShadows => "Sombras de janelas compatíveis",
+            Self::UiEffects => "Efeitos da interface",
         }
     }
 }
@@ -279,7 +288,7 @@ pub fn restore<B: Backend, S: Store>(
 }
 
 pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
-    if journal.schema != 1 || journal.entries.len() > 12 {
+    if journal.schema != 1 || journal.entries.len() > 15 {
         return Err("Backup incompatível ou inválido.".into());
     }
     let mut seen = HashSet::new();

@@ -17,6 +17,9 @@ fn actions(setting: Setting) -> Option<(u32, u32)> {
         Setting::SmoothListScrolling => {
             Some((SPI_GETLISTBOXSMOOTHSCROLLING, SPI_SETLISTBOXSMOOTHSCROLLING))
         }
+        Setting::CursorShadow => Some((SPI_GETCURSORSHADOW, SPI_SETCURSORSHADOW)),
+        Setting::DropShadows => Some((SPI_GETDROPSHADOW, SPI_SETDROPSHADOW)),
+        Setting::UiEffects => Some((SPI_GETUIEFFECTS, SPI_SETUIEFFECTS)),
         _ => None,
     }
 }
@@ -125,6 +128,9 @@ mod tests {
             Setting::TooltipFade,
             Setting::ComboBoxAnimations,
             Setting::SmoothListScrolling,
+            Setting::CursorShadow,
+            Setting::DropShadows,
+            Setting::UiEffects,
         ];
         let originals: Vec<_> = options
             .into_iter()
