@@ -523,7 +523,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                             ) {
                                 set_text(output, "Iniciando o jogo...");
                                 pending = Some(start(move || {
-                                    Finished::Message(app::start_session(path))
+                                    Finished::Message(app::start_session(path, Vec::new()))
                                 }));
                             }
                         } else {

@@ -308,6 +308,21 @@ mod tests {
                 RestoreResult::Started
             );
         }
+        let game = crate::windows_process::identity(std::process::id()).unwrap();
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            assert_eq!(
+                services::stop_for_game(&mut backend, &mut store, Service::Fixture, game).unwrap(),
+                StopResult::Stopped
+            );
+        }
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            assert_eq!(
+                services::restore_game(&mut backend, &mut store, game).unwrap(),
+                vec![(Service::Fixture, Ok(RestoreResult::Started))]
+            );
+        }
         let target = std::fs::canonicalize(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"),
         )

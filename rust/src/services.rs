@@ -1,5 +1,6 @@
 //! Individually selected optional services. Names are an enum, never supplied
 //! by a journal or by a command line. Stopping does not change boot settings.
+use crate::session::ProcessIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -93,10 +94,18 @@ pub enum Phase {
     Applied,
     Reverting,
 }
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Scope {
+    #[default]
+    Manual,
+    Game(ProcessIdentity),
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub service: Service,
     pub phase: Phase,
+    #[serde(default)]
+    pub scope: Scope,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Journal {
@@ -126,6 +135,7 @@ pub enum RestoreResult {
     AlreadyRunning,
     Conflict,
 }
+pub type GameRestoreReport = Vec<(Service, Result<RestoreResult, String>)>;
 
 pub fn validate(journal: &Journal) -> Result<(), String> {
     if journal.schema != 1 || journal.entries.len() > Service::ALL.len() {
@@ -139,12 +149,34 @@ pub fn validate(journal: &Journal) -> Result<(), String> {
     {
         return Err("Serviço duplicado no backup.".into());
     }
+    if journal.entries.iter().any(|entry| matches!(entry.scope, Scope::Game(process) if process.pid == 0 || process.created == 0)) {
+        return Err("Identidade de sessão de serviço inválida.".into());
+    }
     Ok(())
 }
 pub fn stop<B: Backend, S: Store>(
     backend: &mut B,
     store: &mut S,
     service: Service,
+) -> Result<StopResult, String> {
+    stop_scoped(backend, store, service, Scope::Manual)
+}
+pub fn stop_for_game<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+    service: Service,
+    process: ProcessIdentity,
+) -> Result<StopResult, String> {
+    if process.pid == 0 || process.created == 0 {
+        return Err("Identidade de jogo inválida.".into());
+    }
+    stop_scoped(backend, store, service, Scope::Game(process))
+}
+fn stop_scoped<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+    service: Service,
+    scope: Scope,
 ) -> Result<StopResult, String> {
     let previous = store.load_services()?;
     let mut journal = previous.clone().unwrap_or(Journal {
@@ -166,6 +198,7 @@ pub fn stop<B: Backend, S: Store>(
     journal.entries.push(Entry {
         service,
         phase: Phase::Pending,
+        scope,
     });
     if let Some(old) = previous {
         store.update_services(&old, &journal)?;
@@ -186,6 +219,29 @@ pub fn stop<B: Backend, S: Store>(
     applied.entries.last_mut().unwrap().phase = Phase::Applied;
     store.update_services(&armed, &applied)?;
     Ok(StopResult::Stopped)
+}
+
+/// Restores only entries owned by this exact game process; manual entries stay.
+pub fn restore_game<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+    process: ProcessIdentity,
+) -> Result<GameRestoreReport, String> {
+    let Some(journal) = store.load_services()? else {
+        return Ok(Vec::new());
+    };
+    validate(&journal)?;
+    let services: Vec<_> = journal
+        .entries
+        .iter()
+        .filter(|entry| entry.scope == Scope::Game(process))
+        .map(|entry| entry.service)
+        .collect();
+    Ok(services
+        .into_iter()
+        .rev()
+        .map(|service| (service, restore(backend, store, service)))
+        .collect())
 }
 pub fn restore<B: Backend, S: Store>(
     backend: &mut B,
@@ -308,6 +364,40 @@ mod tests {
         assert!(store.0.is_none());
     }
     #[test]
+    fn game_restoration_does_not_touch_manual_or_other_game_records() {
+        let mut backend = Fake::default();
+        for service in [Service::Fax, Service::OfflineMaps, Service::RetailDemo] {
+            backend.0.insert(service, Status::Running);
+        }
+        let first = ProcessIdentity {
+            pid: 42,
+            created: 100,
+        };
+        let second = ProcessIdentity {
+            pid: 42,
+            created: 101,
+        };
+        let mut store = Memory::default();
+        stop(&mut backend, &mut store, Service::Fax).unwrap();
+        stop_for_game(&mut backend, &mut store, Service::OfflineMaps, first).unwrap();
+        stop_for_game(&mut backend, &mut store, Service::RetailDemo, second).unwrap();
+        let result = restore_game(&mut backend, &mut store, first).unwrap();
+        assert_eq!(
+            result,
+            vec![(Service::OfflineMaps, Ok(RestoreResult::Started))]
+        );
+        assert_eq!(backend.0[&Service::Fax], Status::Stopped);
+        assert_eq!(backend.0[&Service::RetailDemo], Status::Stopped);
+        assert_eq!(store.0.unwrap().entries.len(), 2);
+    }
+    #[test]
+    fn old_service_backups_default_to_manual_scope() {
+        let value: Journal =
+            serde_json::from_str(r#"{"schema":1,"entries":[{"service":"Fax","phase":"Applied"}]}"#)
+                .unwrap();
+        assert_eq!(value.entries[0].scope, Scope::Manual);
+    }
+    #[test]
     fn never_starts_previously_stopped_or_unknown_services() {
         let mut backend = Fake::default();
         backend.0.insert(Service::Fax, Status::Stopped);
@@ -328,6 +418,7 @@ mod tests {
             entries: vec![Entry {
                 service: Service::Fax,
                 phase: Phase::Armed,
+                scope: Scope::Manual,
             }],
         }));
         assert_eq!(

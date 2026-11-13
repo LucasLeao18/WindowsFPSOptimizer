@@ -112,6 +112,7 @@ pub struct App {
     confirm_archive_session: bool,
     confirm_archive_backup: bool,
     game_path: Option<PathBuf>,
+    game_services: Vec<Service>,
     session_notice: String,
     next_session_check: Instant,
     status: String,
@@ -185,6 +186,7 @@ impl App {
             confirm_archive_session: false,
             confirm_archive_backup: false,
             game_path,
+            game_services: Vec::new(),
             session_notice: String::new(),
             next_session_check: Instant::now(),
             status: "Selecione um perfil e faça uma análise antes de aplicar.".into(),
@@ -526,6 +528,17 @@ impl eframe::App for App {
                     }
                     if let Some(path) = &self.game_path { ui.label(format!("Executável: {}", path.display())); }
                     ui.label("Se o executável abrir um launcher e terminar, selecione o executável do jogo. Recuperação também fica disponível após fechar o aplicativo.");
+                    if self.preferences.advanced {
+                        egui::CollapsingHeader::new("Serviços opcionais para esta sessão").show(ui, |ui| {
+                            ui.label("Nenhum serviço é selecionado automaticamente. Parar serviços pode exigir administrador; o monitor tentará restaurá-los quando o jogo terminar.");
+                            for service in Service::ALL {
+                                let mut chosen = self.game_services.contains(&service);
+                                if ui.checkbox(&mut chosen, format!("{} — {}", service.title(), service.impact())).changed() {
+                                    if chosen { self.game_services.push(service); } else { self.game_services.retain(|item| *item != service); }
+                                }
+                            }
+                        });
+                    }
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(self.receiver.is_none() && self.preset != Preset::MaximumFps, egui::Button::new("Analisar sem alterar")).clicked() {
@@ -662,7 +675,8 @@ impl eframe::App for App {
                             ui.label("Serviços com backup:");
                             for entry in &snapshot.backed_up {
                                 let state = match entry.phase { services::Phase::Pending => "pendente", services::Phase::Armed => "verificação necessária", services::Phase::Applied => "parado pela operação", services::Phase::Reverting => "restauração interrompida" };
-                                if ui.selectable_label(self.service_restore_selected == Some(entry.service), format!("{} • {state}", entry.service.title())).clicked() { self.service_restore_selected = Some(entry.service); }
+                                let origin = match entry.scope { services::Scope::Manual => "manual", services::Scope::Game(_) => "sessão de jogo" };
+                                if ui.selectable_label(self.service_restore_selected == Some(entry.service), format!("{} • {state} • {origin}", entry.service.title())).clicked() { self.service_restore_selected = Some(entry.service); }
                             }
                             if ui.add_enabled(self.receiver.is_none() && self.service_restore_selected.is_some(), egui::Button::new("Restaurar serviço selecionado")).clicked()
                                 && let Some(service) = self.service_restore_selected { self.status = "Restaurando serviço...".into(); self.run(&ctx, move || JobResult::ServicesChanged(service_restore(service))); }
@@ -778,18 +792,22 @@ impl eframe::App for App {
         if self.confirm_session {
             egui::Window::new("Iniciar sessão do jogo").collapsible(false).resizable(false).show(&ctx, |ui| {
                 ui.label("O jogo será iniciado. O aplicativo tentará ajustar a prioridade, reduzir efeitos visuais e ativar o plano Alto Desempenho existente, salvando os valores anteriores. Esse plano pode aumentar consumo e temperatura. Também tentará impedir a suspensão enquanto o jogo e o aplicativo estiverem abertos; a tela ainda poderá apagar. Um monitor discreto tentará restaurar a sessão ao fim do jogo.");
+                if !self.game_services.is_empty() {
+                    ui.label("Serviços selecionados para parar, se disponíveis e permitidos:");
+                    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| { for service in &self.game_services { ui.label(format!("• {}: {}", service.title(), service.impact())); } });
+                }
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Iniciar jogo")).clicked() {
                         self.confirm_session = false;
-                        if let Some(path) = self.game_path.clone() { self.status = "Iniciando jogo...".into(); self.run(&ctx, move || JobResult::SessionStarted(start_session(path))); }
+                        if let Some(path) = self.game_path.clone() { let services = self.game_services.clone(); self.status = "Iniciando jogo...".into(); self.run(&ctx, move || JobResult::SessionStarted(start_session(path, services))); }
                     }
                 });
             });
         }
         if self.confirm_archive_session {
             egui::Window::new("Arquivar registro da sessão").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("Os efeitos visuais, o plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente. O backup visual pode ser reativado pelo histórico.");
+                ui.label("Os efeitos visuais, o plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente. O backup visual pode ser reativado pelo histórico. Restaure ou arquive antes os serviços associados à sessão.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter alterações")).clicked() {
@@ -1236,14 +1254,19 @@ fn startup_activate(_: PathBuf) -> Result<String, String> {
 }
 
 #[cfg(windows)]
-pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
+pub(crate) fn start_session(
+    path: PathBuf,
+    selected_services: Vec<Service>,
+) -> Result<String, String> {
     use windows_fps_optimizer::{
         power_session::{self, BeginResult, Store as PowerStore},
-        session::{self, SessionStore},
+        services::{Scope, StopResult, Store as ServicesStore},
+        session::{self, ProcessBackend, SessionStore},
         transaction::Store,
         visual_session,
         windows_power::WindowsPower,
         windows_process::{self, WindowsProcess},
+        windows_services::WindowsServices,
     };
     let capabilities = compatibility::classify(Some(compatibility::detect()?));
     if !capabilities.supported {
@@ -1257,6 +1280,16 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         return Err(
             "Há uma sessão anterior. Restaure sua prioridade antes de iniciar outra.".into(),
         );
+    }
+    if let Some(journal) = store.load_services()? {
+        services::validate(&journal)?;
+        if journal
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.scope, Scope::Game(_)))
+        {
+            return Err("Há serviços de uma sessão anterior para restaurar ou arquivar antes de iniciar outra.".into());
+        }
     }
     let process = windows_process::launch(&path)?;
     let priority = session::begin(&mut WindowsProcess, &mut store, process)
@@ -1297,6 +1330,38 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
             "Não foi possível impedir a suspensão automática; confira as opções de energia do Windows."
         }
     };
+    let mut service_messages = Vec::new();
+    for service in selected_services {
+        match WindowsProcess.priority(process) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                service_messages
+                    .push("O jogo terminou antes de concluir os serviços selecionados.".into());
+                break;
+            }
+            Err(error) => {
+                service_messages.push(format!(
+                    "Não foi possível confirmar o jogo antes dos serviços: {error}"
+                ));
+                break;
+            }
+        }
+        match services::stop_for_game(&mut WindowsServices, &mut store, service, process) {
+            Ok(StopResult::Stopped) => {
+                service_messages.push(format!("{} parado com backup.", service.title()))
+            }
+            Ok(StopResult::AlreadyStopped) => service_messages.push(format!(
+                "{} já estava parado; não será iniciado pela sessão.",
+                service.title()
+            )),
+            Err(error) => service_messages.push(format!("{}: {error}", service.title())),
+        }
+    }
+    let service_message = if service_messages.is_empty() {
+        "Nenhum serviço foi selecionado.".to_string()
+    } else {
+        service_messages.join(" ")
+    };
     let monitor = match crate::session_monitor::launch() {
         Ok(()) => "O monitor tentará restaurar a sessão mesmo se a janela for fechada.".to_string(),
         Err(error) => format!(
@@ -1304,7 +1369,7 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
         ),
     };
     Ok(format!(
-        "Jogo iniciado. {priority_message} Use Restaurar sessão para encerrá-la sem fechar o jogo. {visual} {power} {sleep} {monitor}"
+        "Jogo iniciado. {priority_message} Use Restaurar sessão para encerrá-la sem fechar o jogo. {visual} {power} {sleep} {service_message} {monitor}"
     ))
 }
 
@@ -1312,15 +1377,78 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
 pub(crate) fn stop_session() -> Result<String, String> {
     use windows_fps_optimizer::{
         power_session::{self, EndResult as PowerEnd, Store as PowerStore},
+        services::{Scope, Store as ServicesStore},
         session::{self, EndResult as PriorityEnd, SessionStore},
         transaction::Store,
         visual_session,
         windows_power::WindowsPower,
         windows_process::WindowsProcess,
+        windows_services::WindowsServices,
     };
-    crate::sleep_guard::stop();
     let mut store = FileStore::acquire(engine::state_directory()?)?;
+    crate::sleep_guard::stop();
     let mut messages = Vec::new();
+    let priority_record = store.load_session();
+    let power_record = store.load_power();
+    let service_record = store.load_services();
+    let process = priority_record
+        .as_ref()
+        .ok()
+        .and_then(|value| value.as_ref().map(|record| record.process))
+        .or_else(|| {
+            power_record
+                .as_ref()
+                .ok()
+                .and_then(|value| value.as_ref().map(|record| record.process))
+        })
+        .or_else(|| {
+            service_record
+                .as_ref()
+                .ok()
+                .and_then(|value| value.as_ref())
+                .and_then(|journal| {
+                    journal.entries.iter().find_map(|entry| match entry.scope {
+                        Scope::Game(process) => Some(process),
+                        Scope::Manual => None,
+                    })
+                })
+        });
+    match &service_record {
+        Ok(Some(journal)) => {
+            let inconsistent = process.is_some_and(|process| {
+                journal
+                    .entries
+                    .iter()
+                    .any(|entry| matches!(entry.scope, Scope::Game(other) if other != process))
+            });
+            if inconsistent {
+                messages.push("Há serviços de jogos diferentes; restaure-os individualmente na interface avançada.".into());
+            } else if let Some(process) = process {
+                match services::restore_game(&mut WindowsServices, &mut store, process) {
+                    Ok(results) => {
+                        for (service, result) in results {
+                            messages.push(match result {
+                                Ok(services::RestoreResult::Started) => {
+                                    format!("{} restaurado.", service.title())
+                                }
+                                Ok(services::RestoreResult::AlreadyRunning) => {
+                                    format!("{} já estava em execução.", service.title())
+                                }
+                                Ok(services::RestoreResult::Conflict) => format!(
+                                    "{} precisa de revisão; backup preservado.",
+                                    service.title()
+                                ),
+                                Err(error) => format!("{}: {error}", service.title()),
+                            });
+                        }
+                    }
+                    Err(error) => messages.push(format!("Serviços: {error}")),
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => messages.push(format!("Serviços: {error}")),
+    }
     match store.visual_session().load() {
         Ok(Some(_)) => messages.push(match visual_session::end(&mut WindowsRegistry::default(), &mut store.visual_session()) {
             Ok(report) if report.conflicts.is_empty() && report.errors.is_empty() => "Efeitos visuais anteriores restaurados.".into(),
@@ -1330,7 +1458,7 @@ pub(crate) fn stop_session() -> Result<String, String> {
         Err(error) => messages.push(format!("Efeitos visuais: {error}")),
         Ok(None) => {}
     }
-    match store.load_power() {
+    match power_record {
         Ok(Some(_)) => messages.push(match power_session::end(&mut WindowsPower, &mut store) {
             Ok(PowerEnd::Restored) => "Plano de energia anterior restaurado.".into(),
             Ok(PowerEnd::AlreadyOriginal) => "Plano de energia já estava no valor anterior.".into(),
@@ -1342,7 +1470,7 @@ pub(crate) fn stop_session() -> Result<String, String> {
         Err(error) => messages.push(format!("Energia: {error}")),
         Ok(None) => {}
     }
-    match store.load_session() {
+    match priority_record {
         Ok(Some(_)) => messages.push(match session::end(&mut WindowsProcess, &mut store) {
             Ok(PriorityEnd::Restored) => "Prioridade original restaurada.".into(),
             Ok(PriorityEnd::AlreadyOriginal) => "A prioridade já estava no valor anterior.".into(),
@@ -1369,16 +1497,34 @@ pub(crate) fn stop_session() -> Result<String, String> {
 pub(crate) fn check_session() -> Result<SessionCheck, String> {
     use windows_fps_optimizer::{
         power_session::{self, EndResult as PowerEnd, Store as PowerStore},
+        services::{Scope, Store as ServicesStore},
         session::{self, ProcessBackend, SessionStore},
         transaction::Store,
         visual_session,
         windows_power::WindowsPower,
         windows_process::WindowsProcess,
+        windows_services::WindowsServices,
     };
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let priority = store.load_session();
     let power = store.load_power();
     let visual = store.visual_session().load();
+    let services_record = store.load_services().and_then(|record| {
+        if let Some(journal) = &record {
+            services::validate(journal)?;
+        }
+        Ok(record)
+    });
+    let service_process = services_record
+        .as_ref()
+        .ok()
+        .and_then(|value| value.as_ref())
+        .and_then(|journal| {
+            journal.entries.iter().find_map(|entry| match entry.scope {
+                Scope::Game(process) => Some(process),
+                Scope::Manual => None,
+            })
+        });
     let Some(process) = priority
         .as_ref()
         .ok()
@@ -1389,8 +1535,13 @@ pub(crate) fn check_session() -> Result<SessionCheck, String> {
                 .ok()
                 .and_then(|record| record.as_ref().map(|record| record.process))
         })
+        .or(service_process)
     else {
-        if !matches!(visual, Ok(None)) || priority.is_err() || power.is_err() {
+        if !matches!(visual, Ok(None))
+            || priority.is_err()
+            || power.is_err()
+            || services_record.is_err()
+        {
             return Err(
                 "Há registros da sessão pendentes ou inválidos; revise-os ou restaure manualmente."
                     .into(),
@@ -1408,8 +1559,45 @@ pub(crate) fn check_session() -> Result<SessionCheck, String> {
             "Os registros de sessão pertencem a jogos diferentes; restaure manualmente.".into(),
         );
     }
+    if services_record
+        .as_ref()
+        .ok()
+        .and_then(|value| value.as_ref())
+        .is_some_and(|journal| {
+            journal
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.scope, Scope::Game(other) if other != process))
+        })
+    {
+        return Err(
+            "Os registros de serviços pertencem a jogos diferentes; restaure-os manualmente."
+                .into(),
+        );
+    }
     if WindowsProcess.priority(process)?.is_none() {
         let mut problems = Vec::new();
+        match services_record {
+            Ok(Some(_)) => {
+                match services::restore_game(&mut WindowsServices, &mut store, process) {
+                    Ok(results) => {
+                        for (service, result) in results {
+                            match result {
+                                Ok(services::RestoreResult::Conflict) => problems
+                                    .push(format!("{} precisa de revisão.", service.title())),
+                                Ok(_) => {}
+                                Err(error) => {
+                                    problems.push(format!("{}: {error}", service.title()))
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => problems.push(format!("Serviços: {error}")),
+                }
+            }
+            Ok(None) => {}
+            Err(error) => problems.push(format!("Serviços: {error}")),
+        }
         match visual {
             Ok(Some(_)) => match visual_session::end(
                 &mut WindowsRegistry::default(),
@@ -1456,8 +1644,19 @@ pub(crate) fn check_session() -> Result<SessionCheck, String> {
 
 #[cfg(windows)]
 pub(crate) fn archive_session() -> Result<String, String> {
-    crate::sleep_guard::stop();
+    use windows_fps_optimizer::services::{Scope, Store as ServicesStore};
     let mut store = FileStore::acquire(engine::state_directory()?)?;
+    if let Some(journal) = store.load_services()? {
+        services::validate(&journal)?;
+        if journal
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.scope, Scope::Game(_)))
+        {
+            return Err("Restaure ou arquive os backups de serviços da sessão na interface avançada antes de arquivar a sessão.".into());
+        }
+    }
+    crate::sleep_guard::stop();
     let paths = store.archive_session_records()?;
     Ok(format!(
         "Registros arquivados: {}. Os efeitos visuais, o plano de energia e a prioridade atuais foram preservados.",
@@ -1495,7 +1694,7 @@ pub(crate) fn history_path() -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn start_session(_: PathBuf) -> Result<String, String> {
+fn start_session(_: PathBuf, _: Vec<Service>) -> Result<String, String> {
     Err("Esta opção requer Windows.".into())
 }
 #[cfg(not(windows))]
