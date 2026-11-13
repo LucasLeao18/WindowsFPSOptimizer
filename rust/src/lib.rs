@@ -17,6 +17,8 @@ pub mod storage;
 pub mod temp_scan;
 pub mod transaction;
 #[cfg(windows)]
+pub mod windows_pagefile;
+#[cfg(windows)]
 pub mod windows_process;
 #[cfg(windows)]
 pub mod windows_registry;
