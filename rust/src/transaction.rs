@@ -22,6 +22,7 @@ pub enum Setting {
     CursorShadow,
     DropShadows,
     UiEffects,
+    BackgroundRecording,
 }
 
 impl Setting {
@@ -59,6 +60,7 @@ impl Setting {
             Self::CursorShadow => "Sombra do cursor",
             Self::DropShadows => "Sombras de janelas compatíveis",
             Self::UiEffects => "Efeitos da interface",
+            Self::BackgroundRecording => "Gravação em segundo plano do Game Bar",
         }
     }
 }

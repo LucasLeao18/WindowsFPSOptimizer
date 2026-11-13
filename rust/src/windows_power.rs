@@ -94,9 +94,96 @@ impl Backend for WindowsPower {
     }
 }
 
+/// Persistent power profile backend: the plan functions above plus the
+/// Windows power mode ("overlay"), loaded dynamically because powrprof.dll
+/// exports it without a public header. Missing exports mean "unsupported".
+pub struct WindowsPowerProfile;
+
+type GetOverlay = unsafe extern "system" fn(*mut GUID) -> u32;
+type SetOverlay = unsafe extern "system" fn(*const GUID) -> u32;
+
+fn overlay_functions() -> Option<(GetOverlay, SetOverlay)> {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    };
+    let name: Vec<u16> = "powrprof.dll".encode_utf16().chain(Some(0)).collect();
+    // The module stays loaded for the life of the process, like a static import.
+    let module =
+        unsafe { LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+    if module.is_null() {
+        return None;
+    }
+    let get = unsafe { GetProcAddress(module, c"PowerGetEffectiveOverlayScheme".as_ptr().cast()) }?;
+    let set = unsafe { GetProcAddress(module, c"PowerSetActiveOverlayScheme".as_ptr().cast()) }?;
+    Some(unsafe {
+        (
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, GetOverlay>(get),
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, SetOverlay>(set),
+        )
+    })
+}
+
+impl crate::power_profile::Backend for WindowsPowerProfile {
+    fn active_plan(&mut self) -> Result<Scheme, String> {
+        WindowsPower.active()
+    }
+    fn plan_available(&mut self, plan: Scheme) -> Result<bool, String> {
+        WindowsPower.available(plan)
+    }
+    fn set_plan(&mut self, expected: Scheme, target: Scheme) -> Result<(), String> {
+        WindowsPower.set_active(expected, target)
+    }
+    fn mode(&mut self) -> Result<Option<Scheme>, String> {
+        let Some((get, _)) = overlay_functions() else {
+            return Ok(None);
+        };
+        let mut guid = GUID::from_u128(0);
+        let status = unsafe { get(&mut guid) };
+        if status != ERROR_SUCCESS {
+            return Ok(None);
+        }
+        Ok(Some(from_guid(guid)))
+    }
+    fn set_mode(&mut self, expected: Scheme, target: Scheme) -> Result<(), String> {
+        if self.mode()? != Some(expected) {
+            return Err("O modo de energia mudou antes da gravação.".into());
+        }
+        let (_, set) = overlay_functions().ok_or("O modo de energia não está disponível.")?;
+        let guid = to_guid(target);
+        let status = unsafe { set(&guid) };
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "O Windows não permitiu mudar o modo de energia (erro {status})."
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reads_power_mode_without_changes() {
+        use crate::power_profile::Backend;
+        let mut profile = WindowsPowerProfile;
+        let first = profile.mode().unwrap();
+        assert_eq!(profile.mode().unwrap(), first);
+        // Only a plan decision is computed; nothing is written.
+        crate::power_profile::plan(&mut profile).unwrap();
+    }
+    /// Writes the current power mode back unchanged, which exercises the
+    /// calling convention of the dynamically loaded export without altering
+    /// the machine.
+    #[test]
+    fn rewrites_current_power_mode_unchanged() {
+        use crate::power_profile::Backend;
+        let mut profile = WindowsPowerProfile;
+        if let Some(current) = profile.mode().unwrap() {
+            profile.set_mode(current, current).unwrap();
+            assert_eq!(profile.mode().unwrap(), Some(current));
+        }
+    }
     #[test]
     fn reads_active_power_plan_and_enumerates_it() {
         let mut power = WindowsPower;

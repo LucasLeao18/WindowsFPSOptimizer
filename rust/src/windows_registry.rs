@@ -31,6 +31,11 @@ fn info(setting: Setting) -> Result<(&'static str, &'static str), String> {
             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
             "EnableTransparency",
         )),
+        // Per-user "record what happened" setting; the policy is never touched.
+        Setting::BackgroundRecording => Ok((
+            r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
+            "HistoricalCaptureEnabled",
+        )),
         // A machine policy must not be changed until edition and management state
         // can be verified and the journal is protected across elevation.
         Setting::GameCapturePolicy => Err(
@@ -175,9 +180,51 @@ impl Backend for WindowsRegistry {
     }
 }
 
+/// Read-only: whether Memory Integrity (HVCI) is enabled. `None` if unknown.
+pub fn memory_integrity_enabled() -> Option<bool> {
+    let path = wide(
+        r"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity",
+    );
+    let name = wide("Enabled");
+    let mut key: HKEY = ptr::null_mut();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+            &mut key,
+        )
+    } != ERROR_SUCCESS
+    {
+        return Some(false);
+    }
+    let key = Key(key);
+    let (mut kind, mut value, mut size) = (0u32, 0u32, 4u32);
+    let status = unsafe {
+        RegQueryValueExW(
+            key.0,
+            name.as_ptr(),
+            ptr::null(),
+            &mut kind,
+            (&mut value as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    match status {
+        ERROR_FILE_NOT_FOUND => Some(false),
+        ERROR_SUCCESS if kind == REG_DWORD => Some(value != 0),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reads_memory_integrity_state_without_changes() {
+        assert_eq!(memory_integrity_enabled(), memory_integrity_enabled());
+    }
     #[test]
     fn reads_writes_and_deletes_only_isolated_test_values() {
         let unique = std::time::SystemTime::now()

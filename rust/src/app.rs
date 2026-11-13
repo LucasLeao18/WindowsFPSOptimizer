@@ -13,6 +13,7 @@ use windows_fps_optimizer::{
     compatibility,
     diagnostics::{self, PowerSource, Snapshot},
     engine::{self, Preview},
+    power_profile::Kind as PowerKind,
     process_control::{self, Candidate, Termination},
     process_inventory::{self, Inventory, Process as ListedProcess},
     services::{self, Entry as ServiceEntry, Service, Status as ServiceStatus},
@@ -488,24 +489,74 @@ impl eframe::App for App {
                         if ui.selectable_value(&mut self.preset, preset, preset.name()).changed() {
                             self.preview = None; self.confirm = false; self.confirm_session = false; self.confirm_archive_session = false; self.confirm_archive_backup = false;
                             self.status_error = false;
-                            self.status = if preset == Preset::MaximumFps { "Selecione o executável do jogo para iniciar a sessão." } else { "Perfil selecionado. Faça uma nova análise antes de aplicar." }.into();
+                            self.status = "Perfil selecionado. Faça uma nova análise antes de aplicar.".into();
                         }
                     }
                 });
                 ui.add_space(12.0);
                 ui.label(match self.preset {
-                    Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
-                    Preset::Balanced => "Inclui os ajustes do perfil Seguro e também revisa sombras do cursor e de janelas compatíveis. Se a memória virtual estiver manual, devolve-a ao gerenciamento automático do Windows, com backup para restauração.",
-                    Preset::MaximumFps => "Inicia o jogo e tenta ajustar prioridade, efeitos visuais e plano Alto Desempenho, além de impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores são salvos para restauração.",
+                    Preset::Safe => "Ativa o Modo de Jogo e desliga transparência e animações. Deixa o Windows mais leve e responsivo; em jogos, testes publicados mostram diferença pequena ou nula de FPS, exceto em gráficos integrados fracos.",
+                    Preset::Balanced => "Inclui o Seguro, desliga sombras e a gravação em segundo plano do Game Bar (citada como causa de quedas nos 1% low) e devolve a memória virtual manual ao gerenciamento do Windows, o que evita travamentos por falta de memória virtual.",
+                    Preset::MaximumFps => "Inclui o Equilibrado e coloca a energia do Windows no máximo: plano Alto Desempenho em desktops ou modo Melhor desempenho em notebooks. É o ajuste com mais evidência de ganho, sobretudo em CPUs que demoram a acelerar, mas aumenta consumo e temperatura. Vale para todo o Windows, até você restaurar.",
                 });
-                if self.preset == Preset::Balanced {
+                if self.preset != Preset::Safe {
                     ui.label("A mudança de memória virtual exige executar o aplicativo como administrador e vale após reiniciar. Para conferir: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual.");
                     if ui.button("Abrir informações do sistema").clicked() {
                         self.set_status(open_windows_settings(SettingsPage::About), "Configurações abertas. A localização dos controles pode variar.");
                     }
                 }
                 ui.add_space(12.0);
-                if self.preset == Preset::MaximumFps {
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Analisar sem alterar")).clicked() {
+                        self.preview = None; self.status = "Analisando compatibilidade e backup...".into();
+                        let preset = self.preset; self.run(&ctx, move || JobResult::Preview(preview_system(preset)));
+                    }
+                    if ui.add_enabled(self.receiver.is_none() && self.preview.as_ref().is_some_and(|p| p.has_changes()), egui::Button::new("Aplicar perfil")).clicked() { self.confirm = true; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar último backup")).clicked() {
+                        self.status = "Restaurando configurações...".into(); self.run(&ctx, || JobResult::Restored(restore_system()));
+                    }
+                });
+                ui.add_space(10.0);
+                if let Some(preview) = &self.preview {
+                    ui.label(RichText::new("O que será alterado").strong());
+                    if !preview.has_changes() { ui.label("As opções automáticas já estão no estado solicitado."); }
+                    if preview.pagefile_to_automatic { ui.label("• Memória virtual: manual para gerenciada pelo Windows (requer administrador e reinício)"); }
+                    if let Some(power) = &preview.power { ui.label(match power.kind { PowerKind::Plan => "• Plano de energia: Equilibrado para Alto Desempenho", PowerKind::Mode => "• Modo de energia: atual para Melhor desempenho" }); }
+                    for entry in &preview.journal.entries {
+                        ui.label(format!("• {}: {} para {}", setting_name(entry.setting), display_value(entry.original.as_ref()), display_value(Some(&entry.applied))));
+                    }
+                    for note in &preview.notes { ui.label(note); }
+                }
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Abrir Modo de Jogo no Windows").clicked() {
+                        self.set_status(open_windows_settings(SettingsPage::GameMode), "Configurações abertas. Confira o estado diretamente no Windows.");
+                    }
+                    if self.preset == Preset::MaximumFps && ui.button("Abrir Isolamento de núcleo").clicked() {
+                        self.set_status(open_windows_settings(SettingsPage::CoreIsolation), "Segurança do Windows aberta. Desativar a integridade de memória reduz a proteção do sistema.");
+                    }
+                    if ui.button("Abrir configurações de captura").clicked() {
+                        self.set_status(open_windows_settings(SettingsPage::Capture), "Configurações abertas. A disponibilidade depende da edição e das políticas do Windows.");
+                    }
+                });
+                ui.separator();
+                if self.receiver.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Operação em andamento..."); }); }
+                ui.label(RichText::new(&self.status).color(if self.status_error { Color32::from_rgb(255, 160, 150) } else { Color32::from_rgb(190, 220, 160) }));
+                if !self.session_notice.is_empty() { ui.label(&self.session_notice); }
+                if self.preferences.advanced {
+                    ui.add_space(24.0);
+                    ui.heading("Recuperação");
+                    ui.label("Se houver conflito, você pode preservar os valores atuais e arquivar o backup ativo para liberar uma nova análise.");
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backup sem restaurar")).clicked() { self.confirm_archive_backup = true; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup arquivado")).clicked() {
+                        let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                        if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
+                        if let Some(path) = dialog.pick_file() { self.run(&ctx, move || JobResult::Restored(activate_backup(path))); }
+                    }
+                {
+                    ui.add_space(24.0);
+                    ui.heading("Sessão de jogo temporária (opcional)");
+                    ui.label("Independente dos perfis. Inicia um jogo escolhido com prioridade Acima do normal, efeitos visuais reduzidos, plano Alto Desempenho (se existir) e bloqueio da suspensão, e restaura tudo quando o jogo fecha. Testes publicados não mostram ganho consistente de FPS com prioridade; use se preferir isolar as mudanças à duração do jogo.");
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Selecionar jogo (.exe)")).clicked()
                             && let Some(path) = rfd::FileDialog::new().add_filter("Executável", &["exe"]).pick_file() {
@@ -517,6 +568,9 @@ impl eframe::App for App {
                         if ui.add_enabled(self.receiver.is_none() && self.game_path.is_some(), egui::Button::new("Esquecer jogo salvo")).clicked() {
                             if let Some(path) = self.game_path.take() { self.preferences.forget_game(&path); }
                             self.set_status(save_preferences(&self.preferences), "Jogo removido das preferências.");
+                        }
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar sessão de jogo")).clicked() {
+                            self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
                         }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar registro sem restaurar")).clicked() { self.confirm_archive_session = true; }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup visual da sessão")).clicked() {
@@ -552,52 +606,6 @@ impl eframe::App for App {
                         });
                     }
                 }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(self.receiver.is_none() && self.preset != Preset::MaximumFps, egui::Button::new("Analisar sem alterar")).clicked() {
-                        self.preview = None; self.status = "Analisando compatibilidade e backup...".into();
-                        let preset = self.preset; self.run(&ctx, move || JobResult::Preview(preview_system(preset)));
-                    }
-                    if ui.add_enabled(self.receiver.is_none() && self.preview.as_ref().is_some_and(|p| p.has_changes()), egui::Button::new("Aplicar perfil")).clicked() { self.confirm = true; }
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar último backup")).clicked() {
-                        self.status = "Restaurando configurações...".into(); self.run(&ctx, || JobResult::Restored(restore_system()));
-                    }
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar sessão de jogo")).clicked() {
-                        self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
-                    }
-                });
-                ui.add_space(10.0);
-                if let Some(preview) = &self.preview {
-                    ui.label(RichText::new("O que será alterado").strong());
-                    if !preview.has_changes() { ui.label("As opções automáticas já estão no estado solicitado."); }
-                    if preview.pagefile_to_automatic { ui.label("• Memória virtual: manual para gerenciada pelo Windows (requer administrador e reinício)"); }
-                    for entry in &preview.journal.entries {
-                        ui.label(format!("• {}: {} para {}", setting_name(entry.setting), display_value(entry.original.as_ref()), display_value(Some(&entry.applied))));
-                    }
-                    for note in &preview.notes { ui.label(note); }
-                }
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Abrir Modo de Jogo no Windows").clicked() {
-                        self.set_status(open_windows_settings(SettingsPage::GameMode), "Configurações abertas. Confira o estado diretamente no Windows.");
-                    }
-                    if ui.button("Abrir configurações de captura").clicked() {
-                        self.set_status(open_windows_settings(SettingsPage::Capture), "Configurações abertas. A disponibilidade depende da edição e das políticas do Windows.");
-                    }
-                });
-                ui.separator();
-                if self.receiver.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Operação em andamento..."); }); }
-                ui.label(RichText::new(&self.status).color(if self.status_error { Color32::from_rgb(255, 160, 150) } else { Color32::from_rgb(190, 220, 160) }));
-                if !self.session_notice.is_empty() { ui.label(&self.session_notice); }
-                if self.preferences.advanced {
-                    ui.add_space(24.0);
-                    ui.heading("Recuperação");
-                    ui.label("Se houver conflito, você pode preservar os valores atuais e arquivar o backup ativo para liberar uma nova análise.");
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backup sem restaurar")).clicked() { self.confirm_archive_backup = true; }
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup arquivado")).clicked() {
-                        let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
-                        if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
-                        if let Some(path) = dialog.pick_file() { self.run(&ctx, move || JobResult::Restored(activate_backup(path))); }
-                    }
                     ui.add_space(24.0);
                     ui.heading("Configurações do Windows");
                     ui.label("Abra os controles oficiais para revisar gráficos, inicialização, energia ou armazenamento. Algumas páginas dependem da versão do Windows.");
@@ -977,6 +985,7 @@ enum SettingsPage {
     Power,
     Storage,
     About,
+    CoreIsolation,
 }
 
 #[cfg(windows)]
@@ -991,6 +1000,7 @@ fn open_windows_settings(page: SettingsPage) -> Result<(), String> {
         SettingsPage::Power => "ms-settings:powersleep",
         SettingsPage::Storage => "ms-settings:storagesense",
         SettingsPage::About => "ms-settings:about",
+        SettingsPage::CoreIsolation => "windowsdefender://coreisolation",
     };
     let uri: Vec<u16> = uri.encode_utf16().chain(Some(0)).collect();
     let result = unsafe {
@@ -1100,15 +1110,27 @@ fn ensure_no_visual_session(store: &mut FileStore) -> Result<(), String> {
 }
 #[cfg(windows)]
 pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
-    let version = compatibility::detect()?;
-    let pagefile = if preset == Preset::Balanced {
-        windows_fps_optimizer::pagefile::detect_with_timeout(Duration::from_secs(8)).ok()
-    } else {
-        None
+    use windows_fps_optimizer::{
+        power_profile::{self, Store as _},
+        windows_power::WindowsPowerProfile,
+        windows_registry::memory_integrity_enabled,
     };
+    let version = compatibility::detect()?;
+    let mut facts = engine::Facts::default();
+    if preset != Preset::Safe {
+        facts.pagefile =
+            windows_fps_optimizer::pagefile::detect_with_timeout(Duration::from_secs(8)).ok();
+    }
+    if preset == Preset::MaximumFps {
+        facts.power = power_profile::plan(&mut WindowsPowerProfile).ok();
+        facts.memory_integrity = memory_integrity_enabled();
+    }
     let mut preview = with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        engine::preview(backend, store, version, preset, pagefile)
+        if preset == Preset::MaximumFps && store.load_power_profile()?.is_some() {
+            return Err("Há um backup de energia anterior. Use Restaurar último backup antes de aplicar outro perfil.".into());
+        }
+        engine::preview(backend, store, version, preset, facts)
     })?;
     if legacy_backups_present() {
         preview.notes.push("Podem existir backups da versão anterior. Esta versão ainda não os restaura; mantenha a versão anterior para acessá-los.".into());
@@ -1145,6 +1167,19 @@ pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
                 }
             }
         }
+        if let Some(power) = preview.power {
+            use windows_fps_optimizer::{power_profile, windows_power::WindowsPowerProfile};
+            let mut backend = WindowsPowerProfile;
+            match power_profile::begin(&mut backend, store, power.kind, power.from, power.to) {
+                Ok(()) => {
+                    message.push_str(" Energia do Windows ajustada para o máximo desempenho.")
+                }
+                Err(error) => {
+                    let _ = power_profile::restore(&mut backend, store);
+                    message.push_str(&format!(" A energia não foi alterada: {error}"));
+                }
+            }
+        }
         Ok(message)
     })
 }
@@ -1152,7 +1187,7 @@ pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
 pub(crate) fn restore_system() -> Result<String, String> {
     with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        let pagefile = restore_pagefile(store)?;
+        let pagefile = restore_pagefile(store)? + &restore_power_profile(store)?;
         let report = match engine::restore(backend, store) {
             Err(_) if !pagefile.is_empty() => return Ok(pagefile.trim_start().to_string()),
             other => other?,
@@ -1185,6 +1220,31 @@ pub(crate) fn restore_system() -> Result<String, String> {
             report.restored.len()
         ))
     })
+}
+
+/// Restores the persistent power change of the Maximum profile, if any.
+#[cfg(windows)]
+fn restore_power_profile(store: &mut FileStore) -> Result<String, String> {
+    use windows_fps_optimizer::{
+        power_profile::{self, RestoreResult, Store as _},
+        windows_power::WindowsPowerProfile,
+    };
+    if store.load_power_profile()?.is_none() {
+        return Ok(String::new());
+    }
+    Ok(
+        match power_profile::restore(&mut WindowsPowerProfile, store) {
+            Ok(RestoreResult::Restored) => " Energia restaurada.".into(),
+            Ok(RestoreResult::AlreadyOriginal) => {
+                " A energia já estava na configuração original.".into()
+            }
+            Ok(RestoreResult::Conflict) => {
+                " A energia foi alterada por outro programa; ela e o backup foram preservados."
+                    .into()
+            }
+            Err(error) => format!(" Energia: {error}"),
+        },
+    )
 }
 
 /// Restores a pending pagefile backup first, because it is independent of the
@@ -1799,7 +1859,12 @@ pub(crate) fn activate_session_visual(path: PathBuf) -> Result<String, String> {
 #[cfg(windows)]
 pub(crate) fn archive_backup() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
+    use windows_fps_optimizer::power_profile::Store as _;
     let path = store.archive_backup()?;
+    // The power change belongs to the same profile application.
+    if store.load_power_profile().ok().flatten().is_some() {
+        store.archive_power_profile()?;
+    }
     Ok(format!(
         "Backup arquivado em {}. As configurações atuais foram preservadas.",
         path.display()

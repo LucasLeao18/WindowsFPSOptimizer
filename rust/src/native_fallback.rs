@@ -2,7 +2,6 @@
 //! It exposes the same core engines and asks before every operation.
 use crate::app;
 use std::{
-    path::PathBuf,
     ptr,
     sync::{OnceLock, mpsc},
     thread,
@@ -27,7 +26,6 @@ const COMBO: usize = 100;
 const ANALYZE: usize = 101;
 const APPLY: usize = 102;
 const RESTORE: usize = 103;
-const SELECT_GAME: usize = 104;
 const END_SESSION: usize = 105;
 const ARCHIVE_BACKUP: usize = 106;
 const ACTIVATE_BACKUP: usize = 107;
@@ -365,7 +363,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
         child(
             window,
             "BUTTON",
-            "Aplicar / iniciar",
+            "Aplicar",
             WS_TABSTOP,
             flow.place(135),
             APPLY,
@@ -377,14 +375,6 @@ pub fn run(smoke: bool) -> Result<(), String> {
             WS_TABSTOP,
             flow.place(145),
             RESTORE,
-        )?;
-        child(
-            window,
-            "BUTTON",
-            "Selecionar jogo (.exe)",
-            WS_TABSTOP,
-            flow.place(185),
-            SELECT_GAME,
         )?;
         child(
             window,
@@ -445,7 +435,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
         let output_top = flow.next_y();
         let output_height = (client_height - output_top - 12).max(100);
         let mut introduction = String::from(
-            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nSeguro e Equilibrado: escolha o perfil e clique em Analisar.\r\nMáximo FPS: selecione o jogo e clique em Aplicar / iniciar.\r\nA limpeza de temporários é opcional e exige análise e confirmação. Outras ferramentas avançadas exigem a interface completa.",
+            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nEscolha um perfil, clique em Analisar e depois em Aplicar. O Máximo FPS ajusta também a energia de todo o Windows.\r\nRestaurar sessão recupera uma sessão de jogo pendente.\r\nA limpeza de temporários é opcional e exige análise e confirmação. Outras ferramentas avançadas exigem a interface completa.",
         );
         if app::legacy_backups_present() {
             introduction.push_str("\r\n\r\nPodem existir backups da versão anterior neste computador. Para restaurar alterações daquela versão, use a própria versão anterior; esta versão ainda não importa esses backups.");
@@ -497,7 +487,6 @@ pub fn run(smoke: bool) -> Result<(), String> {
             UpdateWindow(window);
         }
     }
-    let mut game: Option<PathBuf> = None;
     let mut preview: Option<Preview> = None;
     let mut cleanup_plan: Option<CleanupPlan> = None;
     let mut pending: Option<mpsc::Receiver<Finished>> = None;
@@ -550,21 +539,6 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 continue;
             }
             match id as usize {
-                SELECT_GAME => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Executável", &["exe"])
-                        .pick_file()
-                    {
-                        set_text(
-                            output,
-                            &format!(
-                                "Jogo selecionado: {}\r\nEscolha Máximo FPS e clique em Aplicar / iniciar.",
-                                path.display()
-                            ),
-                        );
-                        game = Some(path);
-                    }
-                }
                 ANALYZE_TEMP => {
                     cleanup_plan = None;
                     set_text(output, "Analisando temporários sem remover arquivos...");
@@ -592,10 +566,6 @@ pub fn run(smoke: bool) -> Result<(), String> {
                     }
                 }
                 ANALYZE => match selected(combo) {
-                    Some(Preset::MaximumFps) => set_text(
-                        output,
-                        "Máximo FPS tenta ajustar a prioridade, reduzir efeitos visuais, usar o plano Alto Desempenho existente e impedir a suspensão. O plano pode aumentar consumo e temperatura. Selecione o jogo e confirme em Aplicar / iniciar.",
-                    ),
                     Some(preset) => {
                         preview = None;
                         set_text(output, "Analisando compatibilidade...");
@@ -606,21 +576,6 @@ pub fn run(smoke: bool) -> Result<(), String> {
                     None => set_text(output, "Selecione um perfil."),
                 },
                 APPLY => match selected(combo) {
-                    Some(Preset::MaximumFps) => {
-                        if let Some(path) = game.clone() {
-                            if confirm(
-                                window,
-                                "Iniciar o jogo e tentar ajustar a prioridade, reduzir efeitos visuais, ativar o plano Alto Desempenho existente e impedir a suspensão? O plano pode aumentar consumo e temperatura. Os valores anteriores serão salvos. A tela ainda poderá apagar. Um monitor tentará restaurar a sessão quando o jogo terminar.",
-                            ) {
-                                set_text(output, "Iniciando o jogo...");
-                                pending = Some(start(move || {
-                                    Finished::Message(app::start_session(path, Vec::new()))
-                                }));
-                            }
-                        } else {
-                            set_text(output, "Selecione primeiro o executável do jogo.");
-                        }
-                    }
                     Some(preset) => {
                         if let Some(plan) = preview
                             .clone()

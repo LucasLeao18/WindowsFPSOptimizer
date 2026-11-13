@@ -114,6 +114,7 @@ mod tests {
         }
     }
 }
+pub mod power_profile;
 pub mod power_session;
 pub mod services;
 pub mod startup;

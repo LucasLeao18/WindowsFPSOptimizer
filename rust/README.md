@@ -4,13 +4,17 @@ Aplicativo nativo em Rust: um único executável portátil, sem instalador, sem 
 
 ## Perfis
 
-| Perfil | O que faz |
-|---|---|
-| **Seguro** | Modo de Jogo, transparência e animações compatíveis. Cada mudança é mostrada antes da confirmação e salva para restauração. |
-| **Equilibrado** | Inclui o Seguro, desativa sombras do cursor e das janelas e, se a memória virtual estiver manual, devolve-a ao gerenciamento automático do Windows (exige administrador e vale após reiniciar). A configuração manual anterior é salva e pode ser restaurada exatamente. |
-| **Máximo FPS** | Inicia o jogo escolhido e, só durante a sessão, eleva a prioridade, reduz efeitos visuais, ativa o plano Alto Desempenho (se existir), impede a suspensão automática e, opcionalmente, para serviços escolhidos. Um monitor independente restaura tudo quando o jogo termina, mesmo se a janela do aplicativo for fechada. |
+Todos os perfis valem para o Windows inteiro, mostram cada mudança antes de aplicar e guardam os valores anteriores para **Restaurar último backup**.
 
-Nenhum perfil promete ganho de FPS; use a comparação de capturas do PresentMon na interface avançada para medir.
+| Perfil | O que faz | O que os testes publicados mostram |
+|---|---|---|
+| **Seguro** | Ativa o Modo de Jogo e desliga transparência e animações. | Diferença de FPS pequena ou nula em jogos com GPU dedicada. Deixa a área de trabalho mais responsiva e pode ajudar gráficos integrados fracos. |
+| **Equilibrado** | Seguro + sem sombras, sem gravação em segundo plano do Game Bar e memória virtual manual devolvida ao gerenciamento do Windows (exige administrador e reinício). | A gravação em segundo plano custa pouco no FPS médio (~1 FPS), mas é a causa mais citada de quedas nos 1% low. A paginação automática não aumenta FPS; evita travamentos quando a paginação manual é pequena demais. |
+| **Máximo FPS** | Equilibrado + energia no máximo: plano Alto Desempenho em desktops ou modo **Melhor desempenho** em notebooks que só têm o plano Equilibrado. | O ajuste com mais evidência de ganho, principalmente em CPUs que demoram a acelerar. Aumenta consumo e temperatura. Planos personalizados ou do fabricante nunca são substituídos. |
+
+O Máximo informa se a **Integridade de memória** está ativada. É o recurso com maior custo medido em jogos (cerca de 3% a 8% em alguns títulos), mas é proteção de segurança, então o aplicativo não a desativa; o botão **Abrir Isolamento de núcleo** leva à configuração.
+
+Nenhum perfil promete ganho de FPS. Para medir no seu PC, use a comparação de capturas do PresentMon na interface avançada.
 
 ## Interface avançada
 
@@ -21,6 +25,7 @@ Nenhum perfil promete ganho de FPS; use a comparação de capturas do PresentMon
 - Serviços opcionais: parar e restaurar individualmente (exige administrador).
 - Limpeza de temporários do usuário com mais de sete dias, após análise e confirmação.
 - Comparação de capturas CSV do PresentMon (FPS médio, 1% low, P95, P99).
+- Sessão de jogo temporária (opcional): inicia um jogo escolhido com prioridade, efeitos visuais e energia ajustados só enquanto ele está aberto, e um monitor independente restaura tudo quando o jogo fecha.
 
 O botão **Reabrir como administrador** é necessário para memória virtual e serviços. Os demais recursos funcionam como usuário comum.
 

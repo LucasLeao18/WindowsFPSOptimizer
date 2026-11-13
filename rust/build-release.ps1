@@ -66,7 +66,8 @@ if (-not $SkipTests) {
         'launches_fixture_and_restores_session', 'recovers_priority_from_a_reopened_journal',
         'changes_and_restores_own_process_priority', 'terminates_isolated_fixture_after_identity_checks',
         'temporary_sleep_guard_checks_identity_and_stops', 'reads_complete_pagefile_snapshot_without_changes',
-        'reads_local_pagefile_management', 'reads_the_local_active_power_plan', 'user_temp_preview_is_read_only')
+        'reads_local_pagefile_management', 'reads_the_local_active_power_plan', 'user_temp_preview_is_read_only',
+        'real_machine_preview_is_read_only')
 }
 
 Step 'Compilando executáveis'

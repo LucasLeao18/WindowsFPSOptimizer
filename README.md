@@ -1,6 +1,6 @@
 ﻿# Windows FPS Optimizer
 
-**Versão 2.0.0 — reescrita em Rust.** Baixe o executável da sua arquitetura em [Releases](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/latest) (`x64` para a maioria dos PCs, `x86` para Windows 32 bits, `arm64` para notebooks ARM). É um arquivo único e portátil: não precisa de instalador, PowerShell nem Visual C++ Redistributable. Funciona no Windows 10 e no Windows 11.
+**Versão 2.1 — reescrita em Rust.** Baixe o executável da sua arquitetura em [Releases](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/latest) (`x64` para a maioria dos PCs, `x86` para Windows 32 bits, `arm64` para notebooks ARM). É um arquivo único e portátil: não precisa de instalador, PowerShell nem Visual C++ Redistributable. Funciona no Windows 10 e no Windows 11.
 
 Documentação, perfis e instruções de build: [rust/README.md](rust/README.md) · [Histórico de mudanças](CHANGELOG.md)
 

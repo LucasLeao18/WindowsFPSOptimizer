@@ -1,5 +1,14 @@
 # Histórico de mudanças
 
+## 2.1.0 — 13/11/2026
+
+- Perfis revisados com base em testes publicados: as descrições dizem o que cada ajuste costuma (ou não) mudar.
+- **Máximo FPS** deixou de depender de um jogo: agora é um perfil do Windows, aplicado e restaurado como os outros.
+- O Máximo usa o plano Alto Desempenho quando existe ou o modo de energia **Melhor desempenho** em notebooks que só têm o plano Equilibrado. Planos personalizados ou do fabricante são preservados.
+- Equilibrado e Máximo desligam a gravação em segundo plano do Game Bar; a gravação manual continua disponível.
+- O Máximo informa quando a Integridade de memória está ativada e abre o Isolamento de núcleo, sem desativá-la.
+- A sessão de jogo temporária continua disponível como ferramenta opcional na interface avançada.
+
 ## 2.0.0 — 13/11/2026
 
 - Aplicativo reescrito em Rust: executável único e portátil para Windows 10/11 em x64, x86 e ARM64, sem instalador, PowerShell ou Visual C++ Redistributable.

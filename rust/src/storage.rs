@@ -1,6 +1,7 @@
 //! Durable journal with a process-wide lock and exclusive creation.
 use crate::{
     pagefile_transaction::{Journal as PagefileJournal, Store as PagefileStore},
+    power_profile::{Journal as PowerProfileJournal, Store as PowerProfileStore},
     power_session::{Journal as PowerJournal, Store as PowerStore},
     services::{Journal as ServicesJournal, Store as ServicesStore},
     session::{SessionJournal, SessionStore},
@@ -24,6 +25,7 @@ pub struct FileStore {
     visual_session_file: PathBuf,
     services_file: PathBuf,
     pagefile_file: PathBuf,
+    power_profile_file: PathBuf,
     _lock: File,
 }
 
@@ -48,6 +50,7 @@ impl FileStore {
             visual_session_file: directory.join("visual-session.json"),
             services_file: directory.join("services.json"),
             pagefile_file: directory.join("pagefile.json"),
+            power_profile_file: directory.join("power-profile.json"),
             _lock: lock,
         })
     }
@@ -56,6 +59,9 @@ impl FileStore {
     /// This never changes a process or a Windows setting.
     pub fn archive_session(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.session_file, "session", 65_536)
+    }
+    pub fn archive_power_profile(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.power_profile_file, "power-profile", 65_536)
     }
     pub fn archive_power(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.power_file, "power-session", 65_536)
@@ -385,6 +391,66 @@ impl PagefileStore for FileStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
                 "Não foi possível finalizar o backup de memória virtual: {error}"
+            )),
+        }
+    }
+}
+
+impl PowerProfileStore for FileStore {
+    fn load_power_profile(&mut self) -> Result<Option<PowerProfileJournal>, String> {
+        let file = match File::open(&self.power_profile_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Não foi possível abrir o backup de energia: {error}"
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        file.take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("O backup de energia é grande demais.".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Backup de energia inválido: {e}"))
+    }
+    fn save_power_profile(&mut self, journal: &PowerProfileJournal) -> Result<(), String> {
+        let bytes = serde_json::to_vec(journal).map_err(|e| e.to_string())?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.power_profile_file)
+            .map_err(|e| format!("Não foi possível criar o backup de energia: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&self.power_profile_file);
+            return Err(format!(
+                "Não foi possível salvar o backup de energia: {error}"
+            ));
+        }
+        Ok(())
+    }
+    fn update_power_profile(
+        &mut self,
+        old: &PowerProfileJournal,
+        new: &PowerProfileJournal,
+    ) -> Result<(), String> {
+        if self.load_power_profile()?.as_ref() != Some(old) {
+            return Err("O backup de energia mudou durante a operação.".into());
+        }
+        let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+        replace_record(&self.power_profile_file, &bytes)
+    }
+    fn clear_power_profile(&mut self) -> Result<(), String> {
+        match fs::remove_file(&self.power_profile_file) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Não foi possível finalizar o backup de energia: {error}"
             )),
         }
     }
