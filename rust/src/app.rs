@@ -466,9 +466,6 @@ impl eframe::App for App {
                             if let Some(path) = self.game_path.take() { self.preferences.forget_game(&path); }
                             self.set_status(save_preferences(&self.preferences), "Jogo removido das preferências.");
                         }
-                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar sessão")).clicked() {
-                            self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
-                        }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar registro sem restaurar")).clicked() { self.confirm_archive_session = true; }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup visual da sessão")).clicked() {
                             let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
@@ -500,6 +497,9 @@ impl eframe::App for App {
                     if ui.add_enabled(self.receiver.is_none() && self.preview.as_ref().is_some_and(|p| !p.journal.entries.is_empty()), egui::Button::new("Aplicar perfil")).clicked() { self.confirm = true; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar último backup")).clicked() {
                         self.status = "Restaurando configurações...".into(); self.run(&ctx, || JobResult::Restored(restore_system()));
+                    }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar sessão de jogo")).clicked() {
+                        self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
                     }
                 });
                 ui.add_space(10.0);
@@ -764,7 +764,7 @@ impl eframe::App for App {
         if self.confirm_temp {
             egui::Window::new("Confirmar limpeza").collapsible(false).resizable(false).show(&ctx, |ui| {
                 if let Some(plan) = &self.temp_plan { ui.label(format!("Remover até {} arquivo(s) temporários analisados ({:.1} MiB)?", plan.files(), plan.bytes as f64 / 1048576.0)); }
-                ui.label("A exclusão é permanente e não usa a Lixeira. Arquivos que mudaram, estão em uso ou não puderem ser verificados serão preservados.");
+                ui.label("A exclusão é permanente e não usa a Lixeira. Arquivos que mudaram, estão bloqueados ou não puderem ser verificados serão preservados.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_temp = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Remover permanentemente")).clicked() {

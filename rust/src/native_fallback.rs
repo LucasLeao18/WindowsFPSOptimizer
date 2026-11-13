@@ -8,7 +8,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use windows_fps_optimizer::{Preset, engine::Preview};
+use windows_fps_optimizer::{
+    Preset,
+    engine::Preview,
+    temp_cleanup::{self, Plan as CleanupPlan, Report as CleanupReport},
+};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow},
@@ -26,6 +30,8 @@ const ARCHIVE_BACKUP: usize = 106;
 const ACTIVATE_BACKUP: usize = 107;
 const ARCHIVE_SESSION: usize = 108;
 const ACTIVATE_VISUAL: usize = 109;
+const ANALYZE_TEMP: usize = 110;
+const CLEAN_TEMP: usize = 111;
 static EVENTS: OnceLock<mpsc::Sender<(u16, u16)>> = OnceLock::new();
 
 fn wide(text: &str) -> Vec<u16> {
@@ -122,6 +128,8 @@ enum Finished {
     Applied(Result<(), String>),
     Message(Result<String, String>),
     SessionCheck(Result<app::SessionCheck, String>),
+    CleanupPlan(Result<CleanupPlan, String>),
+    CleanupDone(Result<CleanupReport, String>),
 }
 fn start(work: impl FnOnce() -> Finished + Send + 'static) -> mpsc::Receiver<Finished> {
     let (tx, rx) = mpsc::channel();
@@ -274,16 +282,32 @@ pub fn run(smoke: bool) -> Result<(), String> {
             [590, 132, 250, 30],
             ACTIVATE_VISUAL,
         )?;
+        child(
+            window,
+            "BUTTON",
+            "Analisar temporários",
+            WS_TABSTOP,
+            [20, 172, 190, 30],
+            ANALYZE_TEMP,
+        )?;
+        child(
+            window,
+            "BUTTON",
+            "Remover temporários analisados",
+            WS_TABSTOP,
+            [220, 172, 260, 30],
+            CLEAN_TEMP,
+        )?;
         let output = child(
             window,
             "EDIT",
-            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nSeguro e Equilibrado: escolha o perfil e clique em Analisar.\r\nMáximo FPS: selecione o jogo e clique em Aplicar / iniciar.\r\nAs ferramentas avançadas exigem a interface gráfica completa.",
+            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nSeguro e Equilibrado: escolha o perfil e clique em Analisar.\r\nMáximo FPS: selecione o jogo e clique em Aplicar / iniciar.\r\nA limpeza de temporários é opcional e exige análise e confirmação. Outras ferramentas avançadas exigem a interface completa.",
             WS_BORDER
                 | WS_VSCROLL
                 | ES_MULTILINE as u32
                 | ES_READONLY as u32
                 | ES_AUTOVSCROLL as u32,
-            [20, 180, 840, 410],
+            [20, 212, 840, 378],
             0,
         )?;
         Ok((combo, output))
@@ -311,6 +335,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
     }
     let mut game: Option<PathBuf> = None;
     let mut preview: Option<Preview> = None;
+    let mut cleanup_plan: Option<CleanupPlan> = None;
     let mut pending: Option<mpsc::Receiver<Finished>> = None;
     let mut ticks = 0u8;
     let mut next_session_check = Instant::now();
@@ -374,6 +399,32 @@ pub fn run(smoke: bool) -> Result<(), String> {
                             ),
                         );
                         game = Some(path);
+                    }
+                }
+                ANALYZE_TEMP => {
+                    cleanup_plan = None;
+                    set_text(output, "Analisando temporários sem remover arquivos...");
+                    pending = Some(start(|| {
+                        Finished::CleanupPlan(temp_cleanup::plan_user_temp())
+                    }));
+                }
+                CLEAN_TEMP => {
+                    if let Some(plan) = cleanup_plan.as_ref().filter(|plan| plan.files() > 0) {
+                        let message = format!(
+                            "Remover permanentemente até {} arquivo(s) analisados ({:.1} MiB) em {}? A Lixeira não será usada. Arquivos alterados ou bloqueados serão preservados.",
+                            plan.files(),
+                            plan.bytes as f64 / 1048576.0,
+                            plan.folder().display()
+                        );
+                        if confirm(window, &message) {
+                            let plan = cleanup_plan.take().unwrap();
+                            set_text(output, "Verificando e removendo arquivos...");
+                            pending = Some(start(move || {
+                                Finished::CleanupDone(temp_cleanup::apply(&plan))
+                            }));
+                        }
+                    } else {
+                        set_text(output, "Analise os arquivos temporários antes de remover.");
                     }
                 }
                 ANALYZE => match selected(combo) {
@@ -526,8 +577,37 @@ pub fn run(smoke: bool) -> Result<(), String> {
                             output,
                             &format!("Não foi possível verificar a sessão: {error}"),
                         ),
+                        Finished::CleanupPlan(Ok(plan)) => {
+                            set_text(
+                                output,
+                                &format!(
+                                    "Análise: {} arquivo(s), {:.1} MiB, na pasta {}. {} item(ns) ignorados. {}\r\nNenhum arquivo foi removido.",
+                                    plan.files(),
+                                    plan.bytes as f64 / 1048576.0,
+                                    plan.folder().display(),
+                                    plan.skipped,
+                                    if plan.truncated {
+                                        "A análise atingiu o limite e é parcial."
+                                    } else {
+                                        ""
+                                    }
+                                ),
+                            );
+                            cleanup_plan = Some(plan);
+                        }
+                        Finished::CleanupDone(Ok(report)) => set_text(
+                            output,
+                            &format!(
+                                "{} arquivo(s) marcados para exclusão ({:.1} MiB); {} item(ns) preservados por mudança ou acesso indisponível.",
+                                report.marked,
+                                report.bytes as f64 / 1048576.0,
+                                report.skipped
+                            ),
+                        ),
                         Finished::Preview(Err(error))
                         | Finished::Applied(Err(error))
+                        | Finished::CleanupPlan(Err(error))
+                        | Finished::CleanupDone(Err(error))
                         | Finished::Message(Err(error)) => set_text(output, &error),
                     }
                 }
