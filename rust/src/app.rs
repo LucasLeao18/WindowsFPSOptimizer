@@ -13,7 +13,8 @@ use windows_fps_optimizer::{
     compatibility,
     diagnostics::{self, PowerSource, Snapshot},
     engine::{self, Preview},
-    process_inventory::{self, Inventory},
+    process_control::{self, Candidate, Termination},
+    process_inventory::{self, Inventory, Process as ListedProcess},
     storage::FileStore,
     temp_scan::{self, Estimate},
     transaction::Setting,
@@ -30,6 +31,8 @@ enum JobResult {
     Diagnostics(Snapshot),
     TempEstimate(Result<Estimate, String>),
     ProcessInventory(Result<Inventory, String>),
+    ProcessInspection(Result<Candidate, String>),
+    ProcessTerminated(Result<Termination, String>),
 }
 
 enum SessionCheck {
@@ -101,6 +104,9 @@ pub struct App {
     diagnostics: Option<Snapshot>,
     temp_estimate: Option<Estimate>,
     processes: Option<Inventory>,
+    selected_process: Option<ListedProcess>,
+    process_candidate: Option<Candidate>,
+    confirm_process: bool,
     smoke_frames: Option<u8>,
 }
 
@@ -159,6 +165,9 @@ impl App {
             diagnostics: None,
             temp_estimate: None,
             processes: None,
+            selected_process: None,
+            process_candidate: None,
+            confirm_process: false,
             smoke_frames: std::env::args_os()
                 .any(|arg| arg == "--smoke-test")
                 .then_some(0),
@@ -196,6 +205,8 @@ impl App {
                             | JobResult::SessionStopped(Err(_))
                             | JobResult::TempEstimate(Err(_))
                             | JobResult::ProcessInventory(Err(_))
+                            | JobResult::ProcessInspection(Err(_))
+                            | JobResult::ProcessTerminated(Err(_))
                     );
                 }
                 match result {
@@ -246,7 +257,33 @@ impl App {
                     }
                     JobResult::ProcessInventory(Ok(inventory)) => {
                         self.processes = Some(inventory);
+                        self.selected_process = None;
+                        self.process_candidate = None;
+                        self.confirm_process = false;
                         self.status = "Lista de processos atualizada.".into();
+                    }
+                    JobResult::ProcessInspection(Ok(candidate)) => {
+                        if self.selected_process.as_ref().and_then(|p| p.identity)
+                            == Some(candidate.identity)
+                        {
+                            self.process_candidate = Some(candidate);
+                            self.status =
+                                "Processo verificado. Revise o caminho antes de confirmar.".into();
+                        } else {
+                            self.status = "A seleção mudou. Verifique o processo novamente.".into();
+                        }
+                    }
+                    JobResult::ProcessTerminated(Ok(result)) => {
+                        self.selected_process = None;
+                        self.process_candidate = None;
+                        self.processes = None;
+                        self.status = match result {
+                            Termination::Exited => "Processo encerrado. Atualize a lista.",
+                            Termination::Requested => {
+                                "Encerramento solicitado; o Windows ainda não confirmou a saída."
+                            }
+                        }
+                        .into();
                     }
                     JobResult::Capture(before, Ok(capture)) => {
                         if before {
@@ -263,6 +300,8 @@ impl App {
                     | JobResult::SessionStopped(Err(error))
                     | JobResult::TempEstimate(Err(error))
                     | JobResult::ProcessInventory(Err(error))
+                    | JobResult::ProcessInspection(Err(error))
+                    | JobResult::ProcessTerminated(Err(error))
                     | JobResult::Capture(_, Err(error)) => self.status = error,
                     JobResult::SessionChecked(Err(error)) => {
                         self.session_notice =
@@ -461,15 +500,33 @@ impl eframe::App for App {
                     }
                     ui.add_space(24.0);
                     ui.heading("Processos em execução");
-                    ui.label("Consulta pontual: a lista pode mudar a qualquer momento. Nenhum processo será encerrado.");
+                    ui.label("A lista pode mudar. Para encerrar um programa, selecione-o, verifique sua identidade e confirme separadamente. Serviços detectados, processos críticos, do Windows e elevados são protegidos.");
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Listar processos")).clicked() {
                         self.status = "Consultando processos...".into(); self.run(&ctx, || JobResult::ProcessInventory(process_inventory::collect()));
                     }
                     if let Some(inventory) = &self.processes {
                         ui.label(format!("{} processo(s) listado(s){}", inventory.processes.len(), if inventory.truncated { " (lista limitada)" } else { "" }));
+                        let mut selection = None;
                         egui::ScrollArea::vertical().id_salt("process-list").max_height(260.0).show_rows(ui, 24.0, inventory.processes.len(), |ui, rows| {
-                            for index in rows { let process = &inventory.processes[index]; ui.label(format!("{}  •  PID {}  •  {} thread(s)", process.name, process.pid, process.threads)); }
+                            for index in rows {
+                                let process = &inventory.processes[index];
+                                let selected = self.selected_process.as_ref().is_some_and(|selected| selected.identity.is_some() && selected.identity == process.identity);
+                                if ui.selectable_label(selected, format!("{}  •  PID {}  •  {} thread(s)", process.name, process.pid, process.threads)).clicked() { selection = Some(process.clone()); }
+                            }
                         });
+                        if let Some(process) = selection { self.selected_process = Some(process); self.process_candidate = None; self.confirm_process = false; }
+                    }
+                    if let Some(process) = self.selected_process.clone() {
+                        ui.label(format!("Selecionado: {} (PID {})", process.name, process.pid));
+                        if ui.add_enabled(self.receiver.is_none() && process.identity.is_some(), egui::Button::new("Verificar se pode encerrar")).clicked() {
+                            let process = process.clone(); self.process_candidate = None; self.status = "Verificando identidade e proteções...".into();
+                            self.run(&ctx, move || JobResult::ProcessInspection(inspect_listed_process(process)));
+                        }
+                        if process.identity.is_none() { ui.label("A identidade deste processo não pôde ser verificada; o encerramento está indisponível."); }
+                    }
+                    if let Some(candidate) = &self.process_candidate {
+                        ui.label(format!("Executável verificado: {}", candidate.path.display()));
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Encerrar processo selecionado")).clicked() { self.confirm_process = true; }
                     }
                     ui.add_space(24.0);
                     ui.heading("Arquivos temporários");
@@ -515,7 +572,7 @@ impl eframe::App for App {
                 ui.label("Aplicar somente as alterações listadas? Os valores anteriores serão salvos para restauração.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm = false; }
-                    if ui.button("Aplicar").clicked() {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Aplicar")).clicked() {
                         self.confirm = false;
                         if let Some(preview) = self.preview.clone() { self.status = "Salvando backup e aplicando...".into(); self.run(&ctx, move || JobResult::Applied(apply_system(preview))); }
                     }
@@ -527,7 +584,7 @@ impl eframe::App for App {
                 ui.label("O executável selecionado será iniciado. O aplicativo tentará ajustar apenas a prioridade desse processo e salvará o valor anterior.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_session = false; }
-                    if ui.button("Iniciar jogo").clicked() {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Iniciar jogo")).clicked() {
                         self.confirm_session = false;
                         if let Some(path) = self.game_path.clone() { self.status = "Iniciando jogo...".into(); self.run(&ctx, move || JobResult::SessionStarted(start_session(path))); }
                     }
@@ -539,7 +596,7 @@ impl eframe::App for App {
                 ui.label("A prioridade atual do jogo será mantida. O registro será arquivado e o aplicativo não poderá restaurá-la automaticamente a partir da sessão ativa.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_session = false; }
-                    if ui.button("Arquivar e manter prioridade").clicked() {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter prioridade")).clicked() {
                         self.confirm_archive_session = false;
                         self.run(&ctx, || JobResult::SessionStopped(archive_session()));
                     }
@@ -551,14 +608,48 @@ impl eframe::App for App {
                 ui.label("As configurações atuais serão mantidas. O arquivo será guardado no histórico; para restaurá-lo depois, reative-o e use Restaurar último backup.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_backup = false; }
-                    if ui.button("Arquivar e manter configurações").clicked() {
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter configurações")).clicked() {
                         self.confirm_archive_backup = false;
                         self.run(&ctx, || JobResult::Restored(archive_backup()));
                     }
                 });
             });
         }
+        if self.confirm_process {
+            egui::Window::new("Confirmar encerramento").collapsible(false).resizable(false).show(&ctx, |ui| {
+                if let Some(candidate) = &self.process_candidate {
+                    ui.label(format!("Encerrar {} (PID {})?", candidate.path.display(), candidate.identity.pid));
+                    ui.label("O programa será encerrado imediatamente e dados não salvos podem ser perdidos.");
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_process = false; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Encerrar agora")).clicked() {
+                        self.confirm_process = false;
+                        if let Some(candidate) = self.process_candidate.clone() {
+                            self.status = "Verificando novamente e solicitando encerramento...".into();
+                            self.run(&ctx, move || JobResult::ProcessTerminated(process_control::terminate(&candidate)));
+                        }
+                    }
+                });
+            });
+        }
     }
+}
+
+fn inspect_listed_process(process: ListedProcess) -> Result<Candidate, String> {
+    let identity = process
+        .identity
+        .ok_or("A identidade do processo não está disponível.")?;
+    let candidate = process_control::inspect(identity)?;
+    let actual = candidate
+        .path
+        .file_name()
+        .ok_or("Não foi possível identificar o executável.")?
+        .to_string_lossy();
+    if !actual.eq_ignore_ascii_case(&process.name) {
+        return Err("O processo mudou desde a listagem. Atualize e tente novamente.".into());
+    }
+    Ok(candidate)
 }
 
 pub(crate) fn setting_name(setting: Setting) -> &'static str {

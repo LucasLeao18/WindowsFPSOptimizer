@@ -4,6 +4,7 @@ pub struct Process {
     pub pid: u32,
     pub name: String,
     pub threads: u32,
+    pub identity: Option<crate::session::ProcessIdentity>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,7 @@ pub fn collect() -> Result<Inventory, String> {
             pid: entry.th32ProcessID,
             name: String::from_utf16_lossy(&entry.szExeFile[..end]),
             threads: entry.cntThreads,
+            identity: crate::windows_process::identity(entry.th32ProcessID).ok(),
         });
         ok = unsafe { Process32NextW(snapshot.0, &mut entry) };
     }

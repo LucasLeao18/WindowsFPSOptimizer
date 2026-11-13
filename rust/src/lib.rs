@@ -5,6 +5,11 @@ pub mod compatibility;
 pub mod diagnostics;
 pub mod engine;
 pub mod pagefile;
+#[cfg(windows)]
+pub mod process_control;
+#[cfg(not(windows))]
+#[path = "process_control_stub.rs"]
+pub mod process_control;
 pub mod process_inventory;
 pub mod session;
 pub mod storage;
