@@ -155,6 +155,7 @@ foreach ($arch in $targets.Keys) {
 $sums = Get-ChildItem -LiteralPath $dist -File | Sort-Object Name | ForEach-Object {
     '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
 }
-[IO.File]::WriteAllLines((Join-Path $dist 'SHA256SUMS.txt'), [string[]]$sums)
+# LF line endings so that sha256sum -c also works outside Windows.
+[IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"))
 $sums | ForEach-Object { Write-Host "  $_" }
 Write-Host "`nRelease $version pronta em $dist" -ForegroundColor Green
