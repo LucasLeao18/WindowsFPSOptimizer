@@ -467,7 +467,9 @@ fn with_system<T>(
 fn preview_system(preset: Preset) -> Result<Preview, String> {
     let version = compatibility::detect()?;
     let pagefile = if preset == Preset::Balanced {
-        Some(windows_fps_optimizer::pagefile::detect()?)
+        Some(windows_fps_optimizer::pagefile::detect_with_timeout(
+            Duration::from_secs(8),
+        )?)
     } else {
         None
     };
@@ -496,7 +498,9 @@ fn legacy_backups_present() -> bool {
 fn apply_system(preview: Preview) -> Result<(), String> {
     let version = compatibility::detect()?;
     let pagefile = if preview.preset == Preset::Balanced {
-        Some(windows_fps_optimizer::pagefile::detect()?)
+        Some(windows_fps_optimizer::pagefile::detect_with_timeout(
+            Duration::from_secs(8),
+        )?)
     } else {
         None
     };
