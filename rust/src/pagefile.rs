@@ -145,4 +145,67 @@ mod tests {
         }
         assert!(!TEST_GATE.load(Ordering::Acquire));
     }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Changes paging configuration; run only on a disposable administrator runner"]
+    fn disposable_pagefile_provider_observation() {
+        assert_eq!(std::env::var("WFO_DISPOSABLE_RUNNER").as_deref(), Ok("1"));
+        #[derive(serde::Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        #[serde(rename_all = "PascalCase")]
+        struct Setting {
+            name: String,
+            initial_size: u32,
+            maximum_size: u32,
+        }
+        fn settings() -> Vec<Setting> {
+            let connection = wmi::WMIConnection::new().unwrap();
+            let mut rows: Vec<Setting> = connection
+                .raw_query("SELECT Name, InitialSize, MaximumSize FROM Win32_PageFileSetting")
+                .unwrap();
+            rows.sort();
+            rows
+        }
+        fn set_automatic(value: bool) -> Result<(), String> {
+            let connection = wmi::WMIConnection::new().map_err(|e| e.to_string())?;
+            let mut objects = connection
+                .exec_query("SELECT * FROM Win32_ComputerSystem")
+                .map_err(|e| e.to_string())?;
+            let object = objects
+                .next()
+                .ok_or("No computer system")?
+                .map_err(|e| e.to_string())?;
+            if objects.next().is_some() {
+                return Err("Multiple computer systems".into());
+            }
+            object
+                .put_property("AutomaticManagedPagefile", value)
+                .map_err(|e| e.to_string())?;
+            connection.put_instance(&object).map_err(|e| e.to_string())
+        }
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = set_automatic(self.0);
+            }
+        }
+        let initial = detect().unwrap();
+        let _restore = Restore(initial == Management::Automatic);
+        set_automatic(false).expect("Could not select manual management on disposable runner");
+        assert_eq!(detect().unwrap(), Management::Manual);
+        let manual_before = settings();
+        set_automatic(true).expect("Could not enable automatic management on disposable runner");
+        assert_eq!(detect().unwrap(), Management::Automatic);
+        let automatic = settings();
+        set_automatic(false).expect("Could not restore manual management on disposable runner");
+        assert_eq!(detect().unwrap(), Management::Manual);
+        let manual_after = settings();
+        eprintln!(
+            "PAGEFILE_OBSERVATION manual_before={} automatic={} manual_after={} manual_settings_preserved={}",
+            manual_before.len(),
+            automatic.len(),
+            manual_after.len(),
+            manual_before == manual_after
+        );
+    }
 }

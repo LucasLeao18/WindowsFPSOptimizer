@@ -75,6 +75,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Observe pagefile provider on disposable runner
+        continue-on-error: true
+        env:
+          WFO_DISPOSABLE_RUNNER: '1'
+        run: cargo test --locked --target ${{ matrix.target }} disposable_pagefile_provider_observation -- --ignored --nocapture
       - name: Check runtime DLL dependencies
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
