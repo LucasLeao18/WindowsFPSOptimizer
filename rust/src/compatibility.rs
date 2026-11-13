@@ -72,6 +72,8 @@ pub fn conservative_changes(capabilities: &Capabilities) -> Vec<(Setting, Value)
             Setting::SelectionFade,
             Setting::TooltipAnimations,
             Setting::TooltipFade,
+            Setting::ComboBoxAnimations,
+            Setting::SmoothListScrolling,
         ] {
             changes.push((setting, Value::dword(0)));
         }

@@ -13,6 +13,10 @@ fn actions(setting: Setting) -> Option<(u32, u32)> {
         Setting::SelectionFade => Some((SPI_GETSELECTIONFADE, SPI_SETSELECTIONFADE)),
         Setting::TooltipAnimations => Some((SPI_GETTOOLTIPANIMATION, SPI_SETTOOLTIPANIMATION)),
         Setting::TooltipFade => Some((SPI_GETTOOLTIPFADE, SPI_SETTOOLTIPFADE)),
+        Setting::ComboBoxAnimations => Some((SPI_GETCOMBOBOXANIMATION, SPI_SETCOMBOBOXANIMATION)),
+        Setting::SmoothListScrolling => {
+            Some((SPI_GETLISTBOXSMOOTHSCROLLING, SPI_SETLISTBOXSMOOTHSCROLLING))
+        }
         _ => None,
     }
 }
@@ -119,6 +123,8 @@ mod tests {
             Setting::SelectionFade,
             Setting::TooltipAnimations,
             Setting::TooltipFade,
+            Setting::ComboBoxAnimations,
+            Setting::SmoothListScrolling,
         ];
         let originals: Vec<_> = options
             .into_iter()

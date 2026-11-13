@@ -251,6 +251,8 @@ mod tests {
             Setting::SelectionFade,
             Setting::TooltipAnimations,
             Setting::TooltipFade,
+            Setting::ComboBoxAnimations,
+            Setting::SmoothListScrolling,
         ] {
             backend.0.insert(setting, Value::dword(1));
         }
@@ -262,7 +264,7 @@ mod tests {
             workstation: true,
         };
         let view = preview(&mut backend, &mut store, version, Preset::Safe, None).unwrap();
-        assert_eq!(view.journal.entries.len(), 9);
+        assert_eq!(view.journal.entries.len(), 11);
         apply(&mut backend, &mut store, version, &view, None).unwrap();
         restore(&mut backend, &mut store).unwrap();
         assert_eq!(backend.0, before);
