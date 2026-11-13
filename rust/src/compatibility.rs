@@ -63,6 +63,19 @@ pub fn conservative_changes(capabilities: &Capabilities) -> Vec<(Setting, Value)
     if capabilities.transparency_automatic {
         changes.push((Setting::Transparency, Value::dword(0)));
     }
+    if capabilities.supported {
+        for setting in [
+            Setting::WindowAnimations,
+            Setting::ClientAreaAnimations,
+            Setting::MenuAnimations,
+            Setting::MenuFade,
+            Setting::SelectionFade,
+            Setting::TooltipAnimations,
+            Setting::TooltipFade,
+        ] {
+            changes.push((setting, Value::dword(0)));
+        }
+    }
     changes
 }
 
@@ -146,13 +159,16 @@ mod tests {
     #[test]
     fn unsupported_platforms_never_get_automatic_changes() {
         assert!(conservative_changes(&classify(None)).is_empty());
-        assert_eq!(
-            conservative_changes(&classify(Some(WindowsVersion {
-                major: 10,
-                build: 19045,
-                workstation: true
-            }))),
-            vec![(Setting::Transparency, Value::dword(0))]
+        let changes = conservative_changes(&classify(Some(WindowsVersion {
+            major: 10,
+            build: 19045,
+            workstation: true,
+        })));
+        assert!(changes.contains(&(Setting::Transparency, Value::dword(0))));
+        assert!(
+            !changes
+                .iter()
+                .any(|(setting, _)| *setting == Setting::GameMode)
         );
     }
     #[cfg(windows)]

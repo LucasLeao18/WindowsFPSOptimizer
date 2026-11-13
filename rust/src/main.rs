@@ -1,5 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod app;
+#[cfg(windows)]
+mod native_fallback;
 use eframe::egui;
 fn main() {
     use std::sync::{
@@ -8,6 +10,26 @@ fn main() {
     };
     let fallback = std::env::args_os().any(|arg| arg == "--renderer-fallback");
     let smoke = std::env::args_os().any(|arg| arg == "--smoke-test");
+    #[cfg(windows)]
+    if std::env::args_os().any(|arg| arg == "--native-fallback") {
+        if let Err(error) = native_fallback::run(smoke) {
+            if smoke && let Some(path) = std::env::var_os("WFO_SMOKE_LOG") {
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = writeln!(file, "renderer=native; error={error}");
+                }
+            }
+            if !smoke {
+                show_startup_error();
+            }
+            std::process::exit(1);
+        }
+        return;
+    }
     let initialized = Arc::new(AtomicBool::new(false));
     let creator_initialized = initialized.clone();
     let options = eframe::NativeOptions {
@@ -63,12 +85,16 @@ fn main() {
         }
         // Winit cannot recreate an event loop in one process. Retry once in a
         // fresh process, and only before the application itself was created.
-        if !fallback
+        if (!fallback || cfg!(windows))
             && !initialized.load(Ordering::Acquire)
             && let Ok(exe) = std::env::current_exe()
         {
             let mut command = std::process::Command::new(exe);
-            command.arg("--renderer-fallback");
+            command.arg(if fallback {
+                "--native-fallback"
+            } else {
+                "--renderer-fallback"
+            });
             if smoke {
                 command.arg("--smoke-test");
             }
@@ -93,7 +119,7 @@ fn show_startup_error() {
         .encode_utf16()
         .chain(Some(0))
         .collect();
-    let message: Vec<u16> = "A interface gráfica não pôde ser iniciada ou foi interrompida. Confira o driver de vídeo e tente novamente em uma sessão local. Se uma operação foi interrompida, reabra o aplicativo para verificar os backups."
+    let message: Vec<u16> = "A interface não pôde ser iniciada ou foi interrompida. Tente novamente em uma sessão local do Windows. Se uma operação foi interrompida, reabra o aplicativo para verificar os backups."
         .encode_utf16().chain(Some(0)).collect();
     unsafe {
         MessageBoxW(

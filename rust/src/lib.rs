@@ -14,6 +14,8 @@ pub mod transaction;
 pub mod windows_process;
 #[cfg(windows)]
 pub mod windows_registry;
+#[cfg(windows)]
+pub mod windows_visual;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {

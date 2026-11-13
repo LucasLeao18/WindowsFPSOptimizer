@@ -60,6 +60,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --target ${{ matrix.target }} recovers_priority_from_a_reopened_journal -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target ${{ matrix.target }} disposable_visual_profile_round_trip -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check runtime DLL dependencies
@@ -77,11 +79,11 @@ jobs:
           if ($imports -match '(?i)\b(vcruntime|msvcp|concrt)[a-z0-9_]*\.dll\b') {
             throw 'The executable requires a separate Visual C++ runtime DLL'
           }
-      - name: Smoke test graphical renderers
+      - name: Smoke test graphical compatibility paths
         run: |
           $exe = (Resolve-Path "target\${{ matrix.target }}\release\windows-fps-optimizer.exe").Path
           $env:WFO_SMOKE_LOG = Join-Path $env:RUNNER_TEMP 'wfo-renderer-smoke.log'
-          foreach ($arguments in @('--smoke-test', '--smoke-test --renderer-fallback')) {
+          foreach ($arguments in @('--smoke-test', '--smoke-test --renderer-fallback', '--smoke-test --native-fallback')) {
             $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
             if (-not $process.WaitForExit(60000)) {
               $process.Kill()
@@ -91,7 +93,17 @@ jobs:
               if (Test-Path $env:WFO_SMOKE_LOG) { Get-Content $env:WFO_SMOKE_LOG | Write-Output }
               throw "Graphical smoke test failed ($($process.ExitCode)): $arguments"
             }
+            Write-Output "Compatibility startup passed: $arguments"
           }
+          Remove-Item -LiteralPath $env:WFO_SMOKE_LOG -ErrorAction SilentlyContinue
+          $env:WGPU_BACKEND = 'metal'
+          $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test --renderer-fallback' -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Forced fallback timed out' }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path $env:WFO_SMOKE_LOG) -or -not ((Get-Content $env:WFO_SMOKE_LOG -Raw) -match 'renderer=wgpu')) {
+            if (Test-Path $env:WFO_SMOKE_LOG) { Get-Content $env:WFO_SMOKE_LOG | Write-Output }
+            throw 'The native fallback was not verified after renderer failure'
+          }
+          Remove-Item Env:WGPU_BACKEND
       - name: Save test executable for diagnosis
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

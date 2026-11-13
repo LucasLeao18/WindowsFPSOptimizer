@@ -45,6 +45,40 @@ struct Preferences {
     advanced: bool,
     #[serde(default)]
     last_game: Option<PathBuf>,
+    #[serde(default)]
+    games: Vec<PathBuf>,
+}
+
+impl Preferences {
+    fn remember_game(&mut self, path: PathBuf) -> Result<(), String> {
+        if !self.games.iter().any(|existing| {
+            existing
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&path.to_string_lossy())
+        }) {
+            if self.games.len() >= 32 {
+                return Err(
+                    "Limite de 32 jogos salvos. Remova um jogo antes de adicionar outro.".into(),
+                );
+            }
+            self.games.push(path.clone());
+        }
+        self.last_game = Some(path);
+        Ok(())
+    }
+    fn forget_game(&mut self, path: &std::path::Path) {
+        self.games.retain(|existing| {
+            !existing
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&path.to_string_lossy())
+        });
+        if self.last_game.as_ref().is_some_and(|last| {
+            last.to_string_lossy()
+                .eq_ignore_ascii_case(&path.to_string_lossy())
+        }) {
+            self.last_game = None;
+        }
+    }
 }
 
 pub struct App {
@@ -313,7 +347,7 @@ impl eframe::App for App {
                 });
                 ui.add_space(12.0);
                 ui.label(match self.preset {
-                    Preset::Safe => "Modo de Jogo quando suportado e transparência. Capturas são revisadas manualmente.",
+                    Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
                     Preset::Balanced => "Inclui os ajustes do perfil Seguro quando a memória virtual já é gerenciada pelo Windows. Se estiver manual, revise-a nas opções avançadas do sistema.",
                     Preset::MaximumFps => "Inicia o executável selecionado e tenta elevar sua prioridade para Acima do normal. A prioridade pode ser restaurada sem fechar o jogo; o resultado varia conforme o jogo e o computador.",
                 });
@@ -328,12 +362,13 @@ impl eframe::App for App {
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Selecionar jogo (.exe)")).clicked()
                             && let Some(path) = rfd::FileDialog::new().add_filter("Executável", &["exe"]).pick_file() {
-                            self.game_path = Some(path.clone()); self.preferences.last_game = Some(path);
-                            self.set_status(save_preferences(&self.preferences), "Jogo selecionado.");
+                            self.game_path = Some(path.clone());
+                            let result = self.preferences.remember_game(path).and_then(|()| save_preferences(&self.preferences));
+                            self.set_status(result, "Jogo selecionado e salvo.");
                         }
                         if ui.add_enabled(self.receiver.is_none() && self.game_path.is_some(), egui::Button::new("Iniciar jogo e sessão")).clicked() { self.confirm_session = true; }
                         if ui.add_enabled(self.receiver.is_none() && self.game_path.is_some(), egui::Button::new("Esquecer jogo salvo")).clicked() {
-                            self.game_path = None; self.preferences.last_game = None;
+                            if let Some(path) = self.game_path.take() { self.preferences.forget_game(&path); }
                             self.set_status(save_preferences(&self.preferences), "Jogo removido das preferências.");
                         }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar prioridade da sessão")).clicked() {
@@ -341,6 +376,19 @@ impl eframe::App for App {
                         }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar registro sem restaurar")).clicked() { self.confirm_archive_session = true; }
                     });
+                    if !self.preferences.games.is_empty() {
+                        let selected = self.game_path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Selecione um jogo salvo".into());
+                        let games = self.preferences.games.clone();
+                        egui::ComboBox::from_label("Jogos salvos").selected_text(selected).show_ui(ui, |ui| {
+                            for game in games {
+                                let label = game.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| game.display().to_string());
+                                if ui.selectable_label(self.game_path.as_ref() == Some(&game), label).on_hover_text(game.display().to_string()).clicked() {
+                                    self.game_path = Some(game.clone()); self.preferences.last_game = Some(game);
+                                    self.set_status(save_preferences(&self.preferences), "Jogo selecionado.");
+                                }
+                            }
+                        });
+                    }
                     if let Some(path) = &self.game_path { ui.label(format!("Executável: {}", path.display())); }
                     ui.label("Se o executável abrir um launcher e terminar, selecione o executável do jogo. Recuperação também fica disponível após fechar o aplicativo.");
                 }
@@ -373,6 +421,7 @@ impl eframe::App for App {
                     }
                 });
                 ui.separator();
+                if self.receiver.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Operação em andamento..."); }); }
                 ui.label(RichText::new(&self.status).color(if self.status_error { Color32::from_rgb(255, 160, 150) } else { Color32::from_rgb(190, 220, 160) }));
                 if !self.session_notice.is_empty() { ui.label(&self.session_notice); }
                 if self.preferences.advanced {
@@ -512,15 +561,11 @@ impl eframe::App for App {
     }
 }
 
-fn setting_name(setting: Setting) -> &'static str {
-    match setting {
-        Setting::GameMode => "Ativar Modo de Jogo",
-        Setting::Transparency => "Desativar transparência",
-        Setting::GameCapturePolicy => "Política de capturas",
-    }
+pub(crate) fn setting_name(setting: Setting) -> &'static str {
+    setting.description()
 }
 
-fn display_value(value: Option<&windows_fps_optimizer::transaction::Value>) -> String {
+pub(crate) fn display_value(value: Option<&windows_fps_optimizer::transaction::Value>) -> String {
     match value {
         None => "sem valor definido".into(),
         Some(v) if v.kind == 4 && v.bytes.len() == 4 => {
@@ -589,7 +634,7 @@ fn with_system<T>(
     action(&mut WindowsRegistry::default(), &mut store)
 }
 #[cfg(windows)]
-fn preview_system(preset: Preset) -> Result<Preview, String> {
+pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
     let version = compatibility::detect()?;
     let pagefile = if preset == Preset::Balanced {
         Some(windows_fps_optimizer::pagefile::detect_with_timeout(
@@ -620,7 +665,7 @@ fn legacy_backups_present() -> bool {
     }
 }
 #[cfg(windows)]
-fn apply_system(preview: Preview) -> Result<(), String> {
+pub(crate) fn apply_system(preview: Preview) -> Result<(), String> {
     let version = compatibility::detect()?;
     let pagefile = if preview.preset == Preset::Balanced {
         Some(windows_fps_optimizer::pagefile::detect_with_timeout(
@@ -632,7 +677,7 @@ fn apply_system(preview: Preview) -> Result<(), String> {
     with_system(|backend, store| engine::apply(backend, store, version, &preview, pagefile))
 }
 #[cfg(windows)]
-fn restore_system() -> Result<String, String> {
+pub(crate) fn restore_system() -> Result<String, String> {
     with_system(|backend, store| {
         let report = engine::restore(backend, store)?;
         if !report.conflicts.is_empty() || !report.errors.is_empty() {
@@ -666,7 +711,7 @@ fn restore_system() -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn start_session(path: PathBuf) -> Result<String, String> {
+pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
     use windows_fps_optimizer::{
         session::{self, SessionStore},
         windows_process::{self, WindowsProcess},
@@ -688,7 +733,7 @@ fn start_session(path: PathBuf) -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn stop_session() -> Result<String, String> {
+pub(crate) fn stop_session() -> Result<String, String> {
     use windows_fps_optimizer::{
         session::{self, EndResult},
         windows_process::WindowsProcess,
@@ -722,7 +767,7 @@ fn check_session() -> Result<SessionCheck, String> {
 }
 
 #[cfg(windows)]
-fn archive_session() -> Result<String, String> {
+pub(crate) fn archive_session() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let path = store.archive_session()?;
     Ok(format!(
@@ -731,7 +776,7 @@ fn archive_session() -> Result<String, String> {
     ))
 }
 #[cfg(windows)]
-fn archive_backup() -> Result<String, String> {
+pub(crate) fn archive_backup() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let path = store.archive_backup()?;
     Ok(format!(
@@ -740,13 +785,13 @@ fn archive_backup() -> Result<String, String> {
     ))
 }
 #[cfg(windows)]
-fn activate_backup(path: PathBuf) -> Result<String, String> {
+pub(crate) fn activate_backup(path: PathBuf) -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     store.activate_backup(&path)?;
     Ok("Backup reativado. Use Restaurar último backup para restaurar os valores elegíveis.".into())
 }
 #[cfg(windows)]
-fn history_path() -> Option<PathBuf> {
+pub(crate) fn history_path() -> Option<PathBuf> {
     engine::state_directory().ok().map(|p| p.join("History"))
 }
 
@@ -807,15 +852,29 @@ fn load_preferences() -> Preferences {
         onboarded: false,
         advanced: false,
         last_game: None,
+        games: Vec::new(),
     };
     let Some(path) = preferences_path() else {
         return default;
     };
-    let Ok(bytes) = std::fs::read(path) else {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
         return default;
     };
+    let mut bytes = Vec::new();
+    if file.take(262_145).read_to_end(&mut bytes).is_err() || bytes.len() > 262_144 {
+        return default;
+    }
     match serde_json::from_slice::<Preferences>(&bytes) {
-        Ok(p) if p.schema == 1 => p,
+        Ok(mut p) if p.schema == 1 => {
+            p.games.truncate(32);
+            if p.games.is_empty()
+                && let Some(path) = p.last_game.clone()
+            {
+                p.games.push(path);
+            }
+            p
+        }
         _ => default,
     }
 }
@@ -824,6 +883,9 @@ fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().ok_or("Pasta inválida.")?).map_err(|e| e.to_string())?;
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     let bytes = serde_json::to_vec(preferences).map_err(|e| e.to_string())?;
+    if bytes.len() > 262_144 {
+        return Err("As preferências excedem o tamanho permitido.".into());
+    }
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Não foi possível salvar a preferência: {e}"))
 }
@@ -836,6 +898,30 @@ mod tests {
         let input = r#"{"schema":1,"onboarded":true,"advanced":false}"#;
         let preferences: Preferences = serde_json::from_str(input).unwrap();
         assert!(preferences.onboarded);
+        assert!(preferences.last_game.is_none());
+        assert!(preferences.games.is_empty());
+    }
+    #[test]
+    fn saved_games_are_bounded_and_can_be_forgotten() {
+        let mut preferences = Preferences {
+            schema: 1,
+            onboarded: true,
+            advanced: false,
+            last_game: None,
+            games: Vec::new(),
+        };
+        for index in 0..32 {
+            preferences
+                .remember_game(PathBuf::from(format!("C:\\Games\\{index}.exe")))
+                .unwrap();
+        }
+        assert!(
+            preferences
+                .remember_game(PathBuf::from(r"C:\Games\extra.exe"))
+                .is_err()
+        );
+        preferences.forget_game(std::path::Path::new(r"c:\games\31.EXE"));
+        assert_eq!(preferences.games.len(), 31);
         assert!(preferences.last_game.is_none());
     }
 }

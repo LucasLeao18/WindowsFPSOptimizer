@@ -36,8 +36,23 @@ pub fn preview<B: Backend, S: Store>(
         Preset::Balanced => return Err("O perfil Equilibrado requer memória virtual gerenciada pelo Windows. Configure-a nas opções avançadas do sistema ou use o perfil Seguro. Nenhuma configuração foi alterada.".into()),
         Preset::MaximumFps => return Err("A sessão de jogo ainda não está disponível na versão Rust em desenvolvimento.".into()),
     }
-    let journal = transaction::prepare(backend, &conservative_changes(&capabilities))?;
     let mut notes = vec![capabilities.reason.to_string()];
+    let mut journal = Journal {
+        schema: 1,
+        entries: Vec::new(),
+    };
+    for (setting, value) in conservative_changes(&capabilities) {
+        match transaction::prepare(backend, &[(setting, value)]).and_then(|candidate| {
+            transaction::validate(&candidate)?;
+            Ok(candidate)
+        }) {
+            Ok(mut candidate) => journal.entries.append(&mut candidate.entries),
+            Err(error) => notes.push(format!(
+                "{} não será alterada: {error}",
+                setting.description()
+            )),
+        }
+    }
     if preset == Preset::Balanced {
         notes.push("Memória virtual: já gerenciada pelo Windows; nenhuma alteração de paginação é necessária.".into());
     }
@@ -224,5 +239,76 @@ mod tests {
             Some(Management::Automatic),
         )
         .unwrap();
+    }
+    #[test]
+    fn visual_settings_are_backed_up_and_restored() {
+        let mut backend = Fake::default();
+        for setting in [
+            Setting::WindowAnimations,
+            Setting::ClientAreaAnimations,
+            Setting::MenuAnimations,
+            Setting::MenuFade,
+            Setting::SelectionFade,
+            Setting::TooltipAnimations,
+            Setting::TooltipFade,
+        ] {
+            backend.0.insert(setting, Value::dword(1));
+        }
+        let before = backend.0.clone();
+        let mut store = Memory::default();
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let view = preview(&mut backend, &mut store, version, Preset::Safe, None).unwrap();
+        assert_eq!(view.journal.entries.len(), 9);
+        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        restore(&mut backend, &mut store).unwrap();
+        assert_eq!(backend.0, before);
+    }
+    #[test]
+    fn unavailable_visual_parameter_is_reported_and_other_changes_remain_available() {
+        struct Limited(Fake);
+        impl Backend for Limited {
+            fn read(&mut self, setting: Setting) -> Result<Option<Value>, String> {
+                if setting == Setting::MenuFade {
+                    return Err("não suportado".into());
+                }
+                self.0.read(setting)
+            }
+            fn write(&mut self, setting: Setting, value: &Value) -> Result<(), String> {
+                self.0.write(setting, value)
+            }
+            fn delete(&mut self, setting: Setting) -> Result<(), String> {
+                self.0.delete(setting)
+            }
+        }
+        let mut backend = Limited(Fake::default());
+        let mut store = Memory::default();
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let view = preview(&mut backend, &mut store, version, Preset::Safe, None).unwrap();
+        assert!(
+            view.journal
+                .entries
+                .iter()
+                .any(|entry| entry.setting == Setting::GameMode)
+        );
+        assert!(
+            !view
+                .journal
+                .entries
+                .iter()
+                .any(|entry| entry.setting == Setting::MenuFade)
+        );
+        assert!(
+            view.notes
+                .iter()
+                .any(|note| note.contains("Transição de menus") && note.contains("não suportado"))
+        );
     }
 }

@@ -10,6 +10,42 @@ pub enum Setting {
     GameMode,
     Transparency,
     GameCapturePolicy,
+    WindowAnimations,
+    ClientAreaAnimations,
+    MenuAnimations,
+    MenuFade,
+    SelectionFade,
+    TooltipAnimations,
+    TooltipFade,
+}
+
+impl Setting {
+    pub fn is_system_parameter(self) -> bool {
+        matches!(
+            self,
+            Self::WindowAnimations
+                | Self::ClientAreaAnimations
+                | Self::MenuAnimations
+                | Self::MenuFade
+                | Self::SelectionFade
+                | Self::TooltipAnimations
+                | Self::TooltipFade
+        )
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::GameMode => "Modo de Jogo",
+            Self::Transparency => "Transparência",
+            Self::GameCapturePolicy => "Política de capturas",
+            Self::WindowAnimations => "Animações de janelas",
+            Self::ClientAreaAnimations => "Animações da interface",
+            Self::MenuAnimations => "Animações de menus",
+            Self::MenuFade => "Transição de menus",
+            Self::SelectionFade => "Transição de seleção",
+            Self::TooltipAnimations => "Animação de dicas",
+            Self::TooltipFade => "Transição de dicas",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -237,7 +273,7 @@ pub fn restore<B: Backend, S: Store>(
 }
 
 pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
-    if journal.schema != 1 || journal.entries.len() > 3 {
+    if journal.schema != 1 || journal.entries.len() > 10 {
         return Err("Backup incompatível ou inválido.".into());
     }
     let mut seen = HashSet::new();
@@ -246,8 +282,10 @@ pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
             || entry.applied
                 != Value::dword(match entry.setting {
                     Setting::GameMode => 1,
-                    Setting::Transparency | Setting::GameCapturePolicy => 0,
+                    _ => 0,
                 })
+            || (entry.setting.is_system_parameter()
+                && !matches!(entry.original.as_ref(), Some(value) if value == &Value::dword(0) || value == &Value::dword(1)))
             || entry
                 .original
                 .as_ref()

@@ -36,6 +36,7 @@ fn info(setting: Setting) -> Result<(&'static str, &'static str), String> {
         Setting::GameCapturePolicy => Err(
             "A política de captura exige verificação de compatibilidade e administração.".into(),
         ),
+        _ => Err("Esta opção não é um valor do registro suportado.".into()),
     }
 }
 fn error(operation: &str, code: u32) -> String {
@@ -85,6 +86,9 @@ fn open(
 
 impl Backend for WindowsRegistry {
     fn read(&mut self, setting: Setting) -> Result<Option<Value>, String> {
+        if setting.is_system_parameter() {
+            return crate::windows_visual::read(setting).map(Some);
+        }
         let Some((key, name)) = open(self, setting, KEY_QUERY_VALUE, false)? else {
             return Ok(None);
         };
@@ -136,6 +140,9 @@ impl Backend for WindowsRegistry {
         Err("A configuração mudou durante a leitura; tente novamente.".into())
     }
     fn write(&mut self, setting: Setting, value: &Value) -> Result<(), String> {
+        if setting.is_system_parameter() {
+            return crate::windows_visual::write(setting, value);
+        }
         let (key, name) =
             open(self, setting, KEY_SET_VALUE, true)?.ok_or("Chave de registro indisponível")?;
         let status = unsafe {
@@ -154,6 +161,9 @@ impl Backend for WindowsRegistry {
         Ok(())
     }
     fn delete(&mut self, setting: Setting) -> Result<(), String> {
+        if setting.is_system_parameter() {
+            return Err("A configuração visual não pode ser removida.".into());
+        }
         let Some((key, name)) = open(self, setting, KEY_SET_VALUE, false)? else {
             return Ok(());
         };
