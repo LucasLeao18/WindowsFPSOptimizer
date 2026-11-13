@@ -45,6 +45,7 @@ fn main() {
             return;
         }
         show_startup_error();
+        std::process::exit(1);
     }
 }
 
