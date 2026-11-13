@@ -17,6 +17,7 @@ use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow},
     System::LibraryLoader::GetModuleHandleW,
+    UI::Controls::SetScrollInfo,
     UI::WindowsAndMessaging::*,
 };
 
@@ -45,6 +46,44 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_VSCROLL => {
+            let mut info = SCROLLINFO {
+                cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_ALL,
+                ..Default::default()
+            };
+            if unsafe { GetScrollInfo(hwnd, SB_VERT, &mut info) } != 0 {
+                let position = match (wparam & 0xffff) as i32 {
+                    SB_LINEUP => info.nPos - 30,
+                    SB_LINEDOWN => info.nPos + 30,
+                    SB_PAGEUP => info.nPos - info.nPage as i32,
+                    SB_PAGEDOWN => info.nPos + info.nPage as i32,
+                    SB_THUMBPOSITION | SB_THUMBTRACK => info.nTrackPos,
+                    SB_TOP => info.nMin,
+                    SB_BOTTOM => info.nMax,
+                    _ => info.nPos,
+                };
+                let old = info.nPos;
+                info.fMask = SIF_POS;
+                info.nPos = position;
+                let actual = unsafe { SetScrollInfo(hwnd, SB_VERT, &info, 1) };
+                if actual != old {
+                    unsafe {
+                        ScrollWindowEx(
+                            hwnd,
+                            0,
+                            old - actual,
+                            ptr::null(),
+                            ptr::null(),
+                            ptr::null_mut(),
+                            ptr::null_mut(),
+                            SW_SCROLLCHILDREN | SW_INVALIDATE,
+                        );
+                    }
+                }
+            }
+            0
+        }
         WM_COMMAND => {
             if let Some(events) = EVENTS.get() {
                 let _ = events.send(((wparam & 0xffff) as u16, ((wparam >> 16) & 0xffff) as u16));
@@ -223,7 +262,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             0,
             class_name.as_ptr(),
             wide("Windows FPS Optimizer — modo de compatibilidade").as_ptr(),
-            WS_OVERLAPPEDWINDOW & !WS_MAXIMIZEBOX & !WS_THICKFRAME,
+            (WS_OVERLAPPEDWINDOW & !WS_MAXIMIZEBOX & !WS_THICKFRAME) | WS_VSCROLL,
             x,
             y,
             width,
@@ -366,6 +405,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
             CLEAN_TEMP,
         )?;
         let output_top = flow.next_y();
+        let output_height = (client_height - output_top - 12).max(100);
         let output = child(
             window,
             "EDIT",
@@ -375,14 +415,21 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 | ES_MULTILINE as u32
                 | ES_READONLY as u32
                 | ES_AUTOVSCROLL as u32,
-            [
-                12,
-                output_top,
-                (client_width - 24).max(1),
-                (client_height - output_top - 12).max(60),
-            ],
+            [12, output_top, (client_width - 24).max(1), output_height],
             0,
         )?;
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            nMin: 0,
+            nMax: output_top + output_height + 11,
+            nPage: client_height as u32,
+            nPos: 0,
+            ..Default::default()
+        };
+        unsafe {
+            SetScrollInfo(window, SB_VERT, &info, 1);
+        }
         Ok((combo, output))
     })();
     let (combo, output) = match setup {

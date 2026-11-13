@@ -79,7 +79,11 @@ jobs:
         continue-on-error: true
         env:
           WFO_DISPOSABLE_RUNNER: '1'
-        run: cargo test --locked --target ${{ matrix.target }} disposable_pagefile_provider_observation -- --ignored --nocapture
+        run: |
+          cargo test --locked --target ${{ matrix.target }} reads_complete_pagefile_snapshot_without_changes -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target ${{ matrix.target }} disposable_pagefile_provider_observation -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check runtime DLL dependencies
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
