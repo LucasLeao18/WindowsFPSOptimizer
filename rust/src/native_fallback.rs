@@ -15,7 +15,9 @@ use windows_fps_optimizer::{
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
-    Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow},
+    Graphics::Gdi::{
+        COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, MapWindowPoints, UpdateWindow,
+    },
     System::LibraryLoader::GetModuleHandleW,
     UI::Controls::SetScrollInfo,
     UI::WindowsAndMessaging::*,
@@ -34,6 +36,33 @@ const ACTIVATE_VISUAL: usize = 109;
 const ANALYZE_TEMP: usize = 110;
 const CLEAN_TEMP: usize = 111;
 static EVENTS: OnceLock<mpsc::Sender<(u16, u16)>> = OnceLock::new();
+
+// ScrollWindowEx only moves child controls intersecting the visible client
+// area. Move every direct child, including controls currently below the fold.
+struct ScrollMove {
+    parent: HWND,
+    delta: i32,
+}
+unsafe extern "system" fn move_direct_child(child: HWND, data: LPARAM) -> i32 {
+    let movement = unsafe { &*(data as *const ScrollMove) };
+    let parent = unsafe { GetParent(child) };
+    let mut rect = RECT::default();
+    if parent == movement.parent && unsafe { GetWindowRect(child, &mut rect) } != 0 {
+        unsafe {
+            MapWindowPoints(ptr::null_mut(), parent, (&mut rect as *mut RECT).cast(), 2);
+            SetWindowPos(
+                child,
+                ptr::null_mut(),
+                rect.left,
+                rect.top + movement.delta,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    1
+}
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -68,6 +97,10 @@ unsafe extern "system" fn window_proc(
                 info.nPos = position;
                 let actual = unsafe { SetScrollInfo(hwnd, SB_VERT, &info, 1) };
                 if actual != old {
+                    let movement = ScrollMove {
+                        parent: hwnd,
+                        delta: old - actual,
+                    };
                     unsafe {
                         ScrollWindowEx(
                             hwnd,
@@ -77,7 +110,12 @@ unsafe extern "system" fn window_proc(
                             ptr::null(),
                             ptr::null_mut(),
                             ptr::null_mut(),
-                            SW_SCROLLCHILDREN | SW_INVALIDATE,
+                            SW_INVALIDATE,
+                        );
+                        EnumChildWindows(
+                            hwnd,
+                            Some(move_direct_child),
+                            (&movement as *const ScrollMove) as LPARAM,
                         );
                     }
                 }
@@ -747,7 +785,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::Flow;
+    use super::*;
     #[test]
     fn controls_wrap_inside_narrow_and_wide_windows() {
         for width in [320, 480, 640, 760] {
@@ -758,5 +796,60 @@ mod layout_tests {
             }
             assert!(flow.next_y() < 300);
         }
+    }
+
+    #[test]
+    fn scrolling_moves_even_controls_below_the_visible_area() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let class_name = wide("WindowsFPSOptimizerScrollTest");
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(window_proc),
+            hInstance: instance,
+            lpszClassName: class_name.as_ptr(),
+            ..Default::default()
+        };
+        assert_ne!(unsafe { RegisterClassW(&class) }, 0);
+        let window = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                wide("test").as_ptr(),
+                WS_OVERLAPPED | WS_VSCROLL,
+                0,
+                0,
+                200,
+                120,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                instance,
+                ptr::null(),
+            )
+        };
+        assert!(!window.is_null());
+        let button = child(window, "BUTTON", "test", 0, [10, 250, 80, 30], 500).unwrap();
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            nMin: 0,
+            nMax: 400,
+            nPage: 80,
+            nPos: 0,
+            ..Default::default()
+        };
+        unsafe {
+            SetScrollInfo(window, SB_VERT, &info, 1);
+        }
+        let mut before = RECT::default();
+        let mut after = RECT::default();
+        assert_ne!(unsafe { GetWindowRect(button, &mut before) }, 0);
+        unsafe {
+            SendMessageW(window, WM_VSCROLL, SB_LINEDOWN as usize, 0);
+        }
+        assert_ne!(unsafe { GetWindowRect(button, &mut after) }, 0);
+        unsafe {
+            DestroyWindow(window);
+            UnregisterClassW(class_name.as_ptr(), instance);
+        }
+        assert_eq!(after.top, before.top - 30);
     }
 }
