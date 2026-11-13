@@ -75,7 +75,7 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_VSCROLL => {
+        WM_VSCROLL if lparam == 0 => {
             let mut info = SCROLLINFO {
                 cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
                 fMask: SIF_ALL,
