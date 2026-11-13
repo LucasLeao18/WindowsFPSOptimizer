@@ -1,0 +1,53 @@
+name: Rust validation
+
+on:
+  push:
+    branches: [rewrite/rust]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        target: [x86_64-pc-windows-msvc, i686-pc-windows-msvc]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: rust
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare Rust target
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup component add rustfmt clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check diagnostics
+        run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Test and build
+        run: |
+          cargo test --locked --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --target ${{ matrix.target }} tests/fixtures/idle_game.rs -o target/idle_game.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:WFO_TEST_GAME = (Resolve-Path target/idle_game.exe).Path
+          cargo test --locked --target ${{ matrix.target }} launches_fixture_and_restores_session -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target ${{ matrix.target }} recovers_priority_from_a_reopened_journal -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --release --locked --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

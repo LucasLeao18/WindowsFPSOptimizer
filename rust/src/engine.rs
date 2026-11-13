@@ -1,0 +1,219 @@
+//! Compatibility-aware orchestration. No Windows changes happen in preview.
+use crate::{
+    Preset,
+    compatibility::{WindowsVersion, classify, conservative_changes},
+    pagefile::Management,
+    transaction::{self, Backend, Journal, RestoreReport, Store},
+};
+
+#[derive(Debug, Clone)]
+pub struct Preview {
+    pub preset: Preset,
+    pub platform: WindowsVersion,
+    pub journal: Journal,
+    pub notes: Vec<String>,
+}
+
+pub fn preview<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+    version: WindowsVersion,
+    preset: Preset,
+    pagefile: Option<Management>,
+) -> Result<Preview, String> {
+    if store.load()?.is_some() {
+        return Err(
+            "Existe um backup anterior. Revise ou restaure antes de aplicar outro perfil.".into(),
+        );
+    }
+    let capabilities = classify(Some(version));
+    if !capabilities.supported {
+        return Err(capabilities.reason.into());
+    }
+    match preset {
+        Preset::Safe => {},
+        Preset::Balanced if pagefile == Some(Management::Automatic) => {},
+        Preset::Balanced => return Err("O perfil Equilibrado requer memória virtual gerenciada pelo Windows. Configure-a nas opções avançadas do sistema ou use o perfil Seguro. Nenhuma configuração foi alterada.".into()),
+        Preset::MaximumFps => return Err("A sessão de jogo ainda não está disponível na versão Rust em desenvolvimento.".into()),
+    }
+    let journal = transaction::prepare(backend, &conservative_changes(&capabilities))?;
+    let mut notes = vec![capabilities.reason.to_string()];
+    if preset == Preset::Balanced {
+        notes.push("Memória virtual: já gerenciada pelo Windows; nenhuma alteração de paginação é necessária.".into());
+    }
+    if !capabilities.game_mode_automatic {
+        notes.push("Modo de Jogo: configure manualmente no Windows.".into());
+    }
+    notes.push("Capturas: revise nas Configurações do Windows; o aplicativo não muda políticas sem verificar edição e gerenciamento.".into());
+    notes.push("O efeito dos ajustes sobre FPS varia por computador e jogo.".into());
+    Ok(Preview {
+        preset,
+        platform: version,
+        journal,
+        notes,
+    })
+}
+
+pub fn apply<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+    current: WindowsVersion,
+    preview: &Preview,
+    pagefile: Option<Management>,
+) -> Result<(), String> {
+    if preview.platform != current {
+        return Err("A versão do Windows mudou desde a análise. Faça uma nova análise.".into());
+    }
+    let capabilities = classify(Some(current));
+    if !capabilities.supported
+        || preview.preset == Preset::MaximumFps
+        || (preview.preset == Preset::Balanced && pagefile != Some(Management::Automatic))
+    {
+        return Err("Este perfil não é compatível.".into());
+    }
+    let allowed = conservative_changes(&capabilities);
+    for entry in &preview.journal.entries {
+        if !allowed.contains(&(entry.setting, entry.applied.clone())) {
+            return Err("O plano contém uma alteração incompatível.".into());
+        }
+    }
+    transaction::apply(backend, store, &preview.journal)
+}
+
+pub fn restore<B: Backend, S: Store>(
+    backend: &mut B,
+    store: &mut S,
+) -> Result<RestoreReport, String> {
+    let journal = store.load()?.ok_or("Não existe backup para restaurar.")?;
+    transaction::restore(backend, store, &journal)
+}
+
+#[cfg(windows)]
+pub fn state_directory() -> Result<std::path::PathBuf, String> {
+    let root = std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .ok_or("A pasta local do usuário está indisponível.")?;
+    let path = std::path::PathBuf::from(root);
+    if !path.is_absolute() || path.to_string_lossy().starts_with(r"\\") {
+        return Err("A pasta de backup precisa estar em uma unidade local.".into());
+    }
+    Ok(path.join("WindowsFPSOptimizerRust").join("State"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transaction::{Setting, Value};
+    use std::collections::HashMap;
+    #[derive(Default)]
+    struct Fake(HashMap<Setting, Value>);
+    impl Backend for Fake {
+        fn read(&mut self, key: Setting) -> Result<Option<Value>, String> {
+            Ok(self.0.get(&key).cloned())
+        }
+        fn write(&mut self, key: Setting, value: &Value) -> Result<(), String> {
+            self.0.insert(key, value.clone());
+            Ok(())
+        }
+        fn delete(&mut self, key: Setting) -> Result<(), String> {
+            self.0.remove(&key);
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct Memory(Option<Journal>);
+    impl Store for Memory {
+        fn load(&mut self) -> Result<Option<Journal>, String> {
+            Ok(self.0.clone())
+        }
+        fn save(&mut self, value: &Journal) -> Result<(), String> {
+            self.0 = Some(value.clone());
+            Ok(())
+        }
+        fn clear(&mut self) -> Result<(), String> {
+            self.0 = None;
+            Ok(())
+        }
+    }
+    #[test]
+    fn preview_does_not_write_and_unknown_os_is_rejected() {
+        let mut backend = Fake::default();
+        let mut store = Memory::default();
+        let server = WindowsVersion {
+            major: 10,
+            build: 20348,
+            workstation: false,
+        };
+        assert!(preview(&mut backend, &mut store, server, Preset::Safe, None).is_err());
+        let client = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let view = preview(&mut backend, &mut store, client, Preset::Safe, None).unwrap();
+        assert_eq!(view.journal.entries.len(), 2);
+        assert!(backend.0.is_empty() && store.0.is_none());
+    }
+    #[test]
+    fn apply_then_restore_preserves_absent_values() {
+        let mut backend = Fake::default();
+        let mut store = Memory::default();
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let view = preview(&mut backend, &mut store, version, Preset::Safe, None).unwrap();
+        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        assert_eq!(backend.0.len(), 2);
+        assert_eq!(restore(&mut backend, &mut store).unwrap().restored.len(), 2);
+        assert!(backend.0.is_empty());
+    }
+    #[test]
+    fn balanced_rechecks_automatic_pagefile_before_writing() {
+        let mut backend = Fake::default();
+        let mut store = Memory::default();
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        assert!(
+            preview(
+                &mut backend,
+                &mut store,
+                version,
+                Preset::Balanced,
+                Some(Management::Manual)
+            )
+            .is_err()
+        );
+        let view = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::Balanced,
+            Some(Management::Automatic),
+        )
+        .unwrap();
+        assert!(
+            apply(
+                &mut backend,
+                &mut store,
+                version,
+                &view,
+                Some(Management::Manual)
+            )
+            .is_err()
+        );
+        assert!(backend.0.is_empty() && store.0.is_none());
+        apply(
+            &mut backend,
+            &mut store,
+            version,
+            &view,
+            Some(Management::Automatic),
+        )
+        .unwrap();
+    }
+}

@@ -1,6 +1,7 @@
 # Arquivos gerados pelo build e instaladores compilados
 .build/
 dist/
+rust/target/
 
 # Logs e dados locais de execução
 Data/Logs/
