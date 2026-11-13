@@ -130,7 +130,6 @@ mod tests {
             Setting::SmoothListScrolling,
             Setting::CursorShadow,
             Setting::DropShadows,
-            Setting::UiEffects,
         ];
         let originals: Vec<_> = options
             .into_iter()

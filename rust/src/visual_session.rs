@@ -1,6 +1,9 @@
 //! Temporary visual changes for a game session, kept in a separate journal.
 use crate::transaction::{self, Backend, Journal, RestoreReport, Setting, Store, Value};
 
+// Do not toggle the master UI-effects switch: it controls effects that this
+// session does not individually capture. Existing development journals remain
+// readable so their previous value can still be restored.
 const SETTINGS: &[Setting] = &[
     Setting::Transparency,
     Setting::WindowAnimations,
@@ -14,17 +17,14 @@ const SETTINGS: &[Setting] = &[
     Setting::SmoothListScrolling,
     Setting::CursorShadow,
     Setting::DropShadows,
-    // Restore the master switch first, before restoring individual effects.
-    Setting::UiEffects,
 ];
 
 pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
     transaction::validate(journal)?;
-    if journal
-        .entries
-        .iter()
-        .any(|entry| !SETTINGS.contains(&entry.setting) || entry.applied != Value::dword(0))
-    {
+    if journal.entries.iter().any(|entry| {
+        (!SETTINGS.contains(&entry.setting) && entry.setting != Setting::UiEffects)
+            || entry.applied != Value::dword(0)
+    }) {
         return Err("Registro visual da sessão inválido.".into());
     }
     Ok(())
@@ -109,8 +109,19 @@ mod tests {
         for setting in SETTINGS {
             backend.0.insert(*setting, Value::dword(1));
         }
+        backend.0.insert(Setting::UiEffects, Value::dword(1));
         let mut store = Memory::default();
         begin(&mut backend, &mut store).unwrap();
+        assert_eq!(backend.0[&Setting::UiEffects], Value::dword(1));
+        assert!(
+            !store
+                .0
+                .as_ref()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.setting == Setting::UiEffects)
+        );
         backend.0.insert(Setting::MenuFade, Value::dword(2));
         let report = end(&mut backend, &mut store).unwrap();
         assert_eq!(report.conflicts, vec![Setting::MenuFade]);
