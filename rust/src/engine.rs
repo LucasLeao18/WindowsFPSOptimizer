@@ -1,9 +1,9 @@
 //! Compatibility-aware orchestration. No Windows changes happen in preview.
 use crate::{
     Preset,
-    compatibility::{WindowsVersion, classify, conservative_changes},
+    compatibility::{Capabilities, WindowsVersion, classify, conservative_changes},
     pagefile::Management,
-    transaction::{self, Backend, Journal, RestoreReport, Store},
+    transaction::{self, Backend, Journal, RestoreReport, Setting, Store, Value},
 };
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,17 @@ pub struct Preview {
     pub platform: WindowsVersion,
     pub journal: Journal,
     pub notes: Vec<String>,
+}
+
+fn profile_changes(capabilities: &Capabilities, preset: Preset) -> Vec<(Setting, Value)> {
+    let mut changes = conservative_changes(capabilities);
+    if capabilities.supported && preset == Preset::Balanced {
+        changes.extend([
+            (Setting::CursorShadow, Value::dword(0)),
+            (Setting::DropShadows, Value::dword(0)),
+        ]);
+    }
+    changes
 }
 
 pub fn preview<B: Backend, S: Store>(
@@ -45,7 +56,7 @@ pub fn preview<B: Backend, S: Store>(
         schema: 1,
         entries: Vec::new(),
     };
-    for (setting, value) in conservative_changes(&capabilities) {
+    for (setting, value) in profile_changes(&capabilities, preset) {
         match transaction::prepare(backend, &[(setting, value)]).and_then(|candidate| {
             transaction::validate(&candidate)?;
             Ok(candidate)
@@ -93,7 +104,7 @@ pub fn apply<B: Backend, S: Store>(
     if !capabilities.supported || preview.preset == Preset::MaximumFps {
         return Err("Este perfil não é compatível.".into());
     }
-    let allowed = conservative_changes(&capabilities);
+    let allowed = profile_changes(&capabilities, preview.preset);
     for entry in &preview.journal.entries {
         if !allowed.contains(&(entry.setting, entry.applied.clone())) {
             return Err("O plano contém uma alteração incompatível.".into());
@@ -230,6 +241,53 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("não foi possível consultar"))
         );
+    }
+    #[test]
+    fn balanced_adds_reversible_shadows_and_safe_rejects_them() {
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let mut backend = Fake::default();
+        for setting in [Setting::CursorShadow, Setting::DropShadows] {
+            backend.0.insert(setting, Value::dword(1));
+        }
+        let mut store = Memory::default();
+        let safe = preview(&mut backend, &mut store, version, Preset::Safe, None).unwrap();
+        assert!(
+            !safe
+                .journal
+                .entries
+                .iter()
+                .any(|entry| entry.setting == Setting::CursorShadow
+                    || entry.setting == Setting::DropShadows)
+        );
+        let balanced = preview(&mut backend, &mut store, version, Preset::Balanced, None).unwrap();
+        for setting in [Setting::CursorShadow, Setting::DropShadows] {
+            assert!(
+                balanced
+                    .journal
+                    .entries
+                    .iter()
+                    .any(|entry| entry.setting == setting)
+            );
+        }
+        let mut tampered = safe;
+        tampered.journal.entries.push(
+            balanced
+                .journal
+                .entries
+                .iter()
+                .find(|entry| entry.setting == Setting::CursorShadow)
+                .unwrap()
+                .clone(),
+        );
+        assert!(apply(&mut backend, &mut store, version, &tampered, None).is_err());
+        apply(&mut backend, &mut store, version, &balanced, None).unwrap();
+        assert_eq!(backend.0[&Setting::DropShadows], Value::dword(0));
+        restore(&mut backend, &mut store).unwrap();
+        assert_eq!(backend.0[&Setting::DropShadows], Value::dword(1));
     }
     #[test]
     fn visual_settings_are_backed_up_and_restored() {

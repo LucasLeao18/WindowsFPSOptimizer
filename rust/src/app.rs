@@ -443,7 +443,7 @@ impl eframe::App for App {
                 ui.add_space(12.0);
                 ui.label(match self.preset {
                     Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
-                    Preset::Balanced => "Revisa os ajustes disponíveis do perfil Seguro e consulta a memória virtual. A configuração de memória virtual não é alterada nesta versão.",
+                    Preset::Balanced => "Inclui os ajustes do perfil Seguro e também revisa sombras do cursor e de janelas compatíveis. Consulta a memória virtual sem alterá-la nesta versão.",
                     Preset::MaximumFps => "Inicia o jogo e tenta ajustar prioridade, efeitos visuais e plano Alto Desempenho, além de impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores são salvos para restauração.",
                 });
                 if self.preset == Preset::Balanced {
