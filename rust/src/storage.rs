@@ -57,6 +57,36 @@ impl FileStore {
     pub fn visual_session(&mut self) -> VisualSessionStore<'_> {
         VisualSessionStore { owner: self }
     }
+    pub fn activate_visual_session(&mut self, selected: &std::path::Path) -> Result<(), String> {
+        if self.visual_session().load()?.is_some() {
+            return Err("Já existe um backup visual de sessão ativo.".into());
+        }
+        let history = self
+            .visual_session_file
+            .parent()
+            .ok_or("Pasta de backup inválida.")?
+            .join("History");
+        let history =
+            fs::canonicalize(history).map_err(|e| format!("Histórico indisponível: {e}"))?;
+        let selected =
+            fs::canonicalize(selected).map_err(|e| format!("Backup indisponível: {e}"))?;
+        if selected.parent() != Some(history.as_path()) {
+            return Err("Selecione um arquivo diretamente do histórico deste aplicativo.".into());
+        }
+        let file =
+            File::open(selected).map_err(|e| format!("Não foi possível abrir o backup: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_JOURNAL_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("O backup visual da sessão é grande demais.".into());
+        }
+        let journal: Journal =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Backup visual inválido: {e}"))?;
+        crate::visual_session::validate(&journal)?;
+        self.visual_session().save(&journal)
+    }
     pub fn archive_startup(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.startup_file, "startup", MAX_STARTUP_BYTES)
     }

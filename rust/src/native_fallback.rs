@@ -25,6 +25,7 @@ const END_SESSION: usize = 105;
 const ARCHIVE_BACKUP: usize = 106;
 const ACTIVATE_BACKUP: usize = 107;
 const ARCHIVE_SESSION: usize = 108;
+const ACTIVATE_VISUAL: usize = 109;
 static EVENTS: OnceLock<mpsc::Sender<(u16, u16)>> = OnceLock::new();
 
 fn wide(text: &str) -> Vec<u16> {
@@ -265,6 +266,14 @@ pub fn run(smoke: bool) -> Result<(), String> {
             [420, 132, 160, 30],
             ARCHIVE_SESSION,
         )?;
+        child(
+            window,
+            "BUTTON",
+            "Reativar visual da sessão",
+            WS_TABSTOP,
+            [590, 132, 250, 30],
+            ACTIVATE_VISUAL,
+        )?;
         let output = child(
             window,
             "EDIT",
@@ -442,6 +451,18 @@ pub fn run(smoke: bool) -> Result<(), String> {
                         set_text(output, "Reativando backup...");
                         pending =
                             Some(start(move || Finished::Message(app::activate_backup(path))));
+                    }
+                }
+                ACTIVATE_VISUAL => {
+                    let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                    if let Some(path) = app::history_path() {
+                        dialog = dialog.set_directory(path);
+                    }
+                    if let Some(path) = dialog.pick_file() {
+                        set_text(output, "Reativando backup visual...");
+                        pending = Some(start(move || {
+                            Finished::Message(app::activate_session_visual(path))
+                        }));
                     }
                 }
                 ARCHIVE_SESSION

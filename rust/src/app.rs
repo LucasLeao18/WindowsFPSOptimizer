@@ -470,6 +470,11 @@ impl eframe::App for App {
                             self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
                         }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar registro sem restaurar")).clicked() { self.confirm_archive_session = true; }
+                        if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup visual da sessão")).clicked() {
+                            let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                            if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
+                            if let Some(path) = dialog.pick_file() { self.status = "Reativando backup visual...".into(); self.run(&ctx, move || JobResult::SessionStopped(activate_session_visual(path))); }
+                        }
                     });
                     if !self.preferences.games.is_empty() {
                         let selected = self.game_path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Selecione um jogo salvo".into());
@@ -705,7 +710,7 @@ impl eframe::App for App {
         }
         if self.confirm_archive_session {
             egui::Window::new("Arquivar registro da sessão").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("Os efeitos visuais, o plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente.");
+                ui.label("Os efeitos visuais, o plano de energia e a prioridade atuais serão mantidos. Os registros serão arquivados e não serão restaurados automaticamente. O backup visual pode ser reativado pelo histórico.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter alterações")).clicked() {
@@ -1275,6 +1280,12 @@ pub(crate) fn archive_session() -> Result<String, String> {
     ))
 }
 #[cfg(windows)]
+pub(crate) fn activate_session_visual(path: PathBuf) -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    store.activate_visual_session(&path)?;
+    Ok("Backup visual reativado. Use Restaurar sessão para rever e restaurar os valores elegíveis.".into())
+}
+#[cfg(windows)]
 pub(crate) fn archive_backup() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let path = store.archive_backup()?;
@@ -1308,6 +1319,10 @@ fn check_session() -> Result<SessionCheck, String> {
 }
 #[cfg(not(windows))]
 fn archive_session() -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn activate_session_visual(_: PathBuf) -> Result<String, String> {
     Err("Esta opção requer Windows.".into())
 }
 #[cfg(not(windows))]

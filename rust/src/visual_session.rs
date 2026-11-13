@@ -18,7 +18,7 @@ const SETTINGS: &[Setting] = &[
     Setting::UiEffects,
 ];
 
-fn validate(journal: &Journal) -> Result<(), String> {
+pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
     transaction::validate(journal)?;
     if journal
         .entries
@@ -149,6 +149,12 @@ mod tests {
             store.save(&other).unwrap();
             begin(&mut backend, &mut store.visual_session()).unwrap();
             assert_eq!(store.load().unwrap(), Some(other.clone()));
+            let archive = store.archive_session_records().unwrap().pop().unwrap();
+            let outside = directory.join("outside.json");
+            std::fs::copy(&archive, &outside).unwrap();
+            assert!(store.activate_visual_session(&outside).is_err());
+            store.activate_visual_session(&archive).unwrap();
+            assert!(store.activate_visual_session(&archive).is_err());
         }
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
