@@ -112,26 +112,64 @@ mod tests {
             storage::FileStore,
             windows_process,
         };
+        use windows_sys::Win32::System::Power::{PowerDeleteScheme, PowerDuplicateScheme};
         let mut power = WindowsPower;
-        let original = power.active().unwrap();
-        if original == HIGH_PERFORMANCE || !power.available(HIGH_PERFORMANCE).unwrap() {
-            eprintln!(
-                "SKIPPED: a distinct built-in high performance plan is not available on this runner"
-            );
-            return;
+        let initial = power.active().unwrap();
+        struct Restore {
+            initial: Scheme,
+            created: Vec<Scheme>,
         }
-        struct Restore(Scheme);
         impl Drop for Restore {
             fn drop(&mut self) {
                 let mut power = WindowsPower;
                 if let Ok(current) = power.active()
-                    && current != self.0
+                    && current != self.initial
                 {
-                    let _ = power.set_active(current, self.0);
+                    let _ = power.set_active(current, self.initial);
+                }
+                if power.active().ok() == Some(self.initial) {
+                    for scheme in &self.created {
+                        unsafe {
+                            PowerDeleteScheme(ptr::null_mut(), &to_guid(*scheme));
+                        }
+                    }
                 }
             }
         }
-        let _restore = Restore(original);
+        let mut restore = Restore {
+            initial,
+            created: Vec::new(),
+        };
+        let mut original = initial;
+        if original == HIGH_PERFORMANCE {
+            let mut allocated = ptr::null_mut();
+            let status = unsafe {
+                PowerDuplicateScheme(ptr::null_mut(), &to_guid(original), &mut allocated)
+            };
+            assert_eq!(
+                status, ERROR_SUCCESS,
+                "Could not create isolated original scheme: {status}"
+            );
+            assert!(!allocated.is_null());
+            original = from_guid(unsafe { *allocated });
+            unsafe {
+                LocalFree(allocated.cast());
+            }
+            restore.created.push(original);
+            power.set_active(initial, original).unwrap();
+        }
+        if !power.available(HIGH_PERFORMANCE).unwrap() {
+            let mut desired = to_guid(HIGH_PERFORMANCE);
+            let mut destination = &mut desired as *mut GUID;
+            let status = unsafe {
+                PowerDuplicateScheme(ptr::null_mut(), &to_guid(original), &mut destination)
+            };
+            assert_eq!(
+                status, ERROR_SUCCESS,
+                "Could not create isolated target scheme: {status}"
+            );
+            restore.created.push(HIGH_PERFORMANCE);
+        }
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -155,6 +193,12 @@ mod tests {
             );
         }
         assert_eq!(power.active().unwrap(), original);
-        std::fs::remove_dir_all(directory).unwrap();
+        let root = std::fs::canonicalize(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"),
+        )
+        .unwrap();
+        let resolved = std::fs::canonicalize(directory).unwrap();
+        assert_eq!(resolved.parent(), Some(root.as_path()));
+        std::fs::remove_dir_all(resolved).unwrap();
     }
 }
