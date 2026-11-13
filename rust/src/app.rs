@@ -648,6 +648,7 @@ impl eframe::App for App {
                             self.service_snapshot = None; self.service_selected = None; self.service_restore_selected = None;
                             self.status = "Consultando serviços...".into(); self.run(&ctx, || JobResult::ServicesList(services_list()));
                         }
+                        if ui.button("Abrir Serviços do Windows").clicked() { self.set_status(open_services_console(), "Console de serviços aberto."); }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups de serviços")).clicked() { self.confirm_archive_services = true; }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup de serviços")).clicked() {
                             let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
@@ -998,6 +999,41 @@ fn open_windows_settings(page: SettingsPage) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn open_windows_settings(_: SettingsPage) -> Result<(), String> {
+    Err("Esta opção requer Windows.".into())
+}
+
+#[cfg(windows)]
+fn open_services_console() -> Result<(), String> {
+    use std::{os::windows::ffi::OsStringExt, ptr};
+    use windows_sys::Win32::{
+        System::SystemInformation::GetSystemDirectoryW,
+        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+    let mut buffer = vec![0u16; 32768];
+    let size = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if size == 0 || size >= buffer.len() {
+        return Err("Não foi possível localizar o console de serviços do Windows.".into());
+    }
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..size])).join("services.msc");
+    use std::os::windows::ffi::OsStrExt;
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            path.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize <= 32 {
+        return Err("Não foi possível abrir o console de serviços do Windows.".into());
+    }
+    Ok(())
+}
+#[cfg(not(windows))]
+fn open_services_console() -> Result<(), String> {
     Err("Esta opção requer Windows.".into())
 }
 
