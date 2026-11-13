@@ -7,6 +7,7 @@ fn main() {
         atomic::{AtomicBool, Ordering},
     };
     let fallback = std::env::args_os().any(|arg| arg == "--renderer-fallback");
+    let smoke = std::env::args_os().any(|arg| arg == "--smoke-test");
     let initialized = Arc::new(AtomicBool::new(false));
     let creator_initialized = initialized.clone();
     let options = eframe::NativeOptions {
@@ -37,14 +38,22 @@ fn main() {
         if !fallback
             && !initialized.load(Ordering::Acquire)
             && let Ok(exe) = std::env::current_exe()
-            && std::process::Command::new(exe)
-                .arg("--renderer-fallback")
-                .spawn()
-                .is_ok()
         {
-            return;
+            let mut command = std::process::Command::new(exe);
+            command.arg("--renderer-fallback");
+            if smoke {
+                command.arg("--smoke-test");
+            }
+            if let Ok(mut child) = command.spawn() {
+                if smoke {
+                    std::process::exit(child.wait().ok().and_then(|s| s.code()).unwrap_or(1));
+                }
+                return;
+            }
         }
-        show_startup_error();
+        if !smoke {
+            show_startup_error();
+        }
         std::process::exit(1);
     }
 }

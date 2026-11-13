@@ -77,3 +77,14 @@ jobs:
           if ($imports -match '(?i)\b(vcruntime|msvcp|concrt)[a-z0-9_]*\.dll\b') {
             throw 'The executable requires a separate Visual C++ runtime DLL'
           }
+      - name: Smoke test graphical renderers
+        run: |
+          $exe = (Resolve-Path "target\${{ matrix.target }}\release\windows-fps-optimizer.exe").Path
+          foreach ($arguments in @('--smoke-test', '--smoke-test --renderer-fallback')) {
+            $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill()
+              throw "Graphical smoke test timed out: $arguments"
+            }
+            if ($process.ExitCode -ne 0) { throw "Graphical smoke test failed ($($process.ExitCode)): $arguments" }
+          }

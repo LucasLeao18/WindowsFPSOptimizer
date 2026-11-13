@@ -43,6 +43,8 @@ pub fn preview<B: Backend, S: Store>(
     }
     if !capabilities.game_mode_automatic {
         notes.push("Modo de Jogo: configure manualmente no Windows.".into());
+    } else {
+        notes.push("O Windows pode aplicar políticas próprias ou exigir nova sessão para refletir uma alteração.".into());
     }
     notes.push("Capturas: revise nas Configurações do Windows; o aplicativo não muda políticas sem verificar edição e gerenciamento.".into());
     notes.push("O efeito dos ajustes sobre FPS varia por computador e jogo.".into());

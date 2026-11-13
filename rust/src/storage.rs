@@ -40,44 +40,81 @@ impl FileStore {
     /// Preserve the original record before removing it from the active slot.
     /// This never changes a process or a Windows setting.
     pub fn archive_session(&mut self) -> Result<PathBuf, String> {
-        let file = File::open(&self.session_file)
-            .map_err(|e| format!("Não foi possível abrir o registro da sessão: {e}"))?;
-        let mut bytes = Vec::new();
-        file.take(65_537)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() > 65_536 {
+        archive_record(&self.session_file, "session", 65_536)
+    }
+    pub fn archive_backup(&mut self) -> Result<PathBuf, String> {
+        archive_record(&self.file, "backup", MAX_JOURNAL_BYTES)
+    }
+    /// Reactivate only a validated backup from this installation's history.
+    /// This copies the journal; it does not change Windows settings.
+    pub fn activate_backup(&mut self, selected: &std::path::Path) -> Result<(), String> {
+        if Store::load(self)?.is_some() {
             return Err(
-                "O registro de sessão é grande demais para arquivar automaticamente.".into(),
+                "Já existe um backup ativo. Restaure ou arquive-o antes de reativar outro.".into(),
             );
         }
-        let parent = self
-            .session_file
+        let history = self
+            .file
             .parent()
-            .ok_or("Pasta de sessão inválida.")?;
-        let history = parent.join("History");
-        fs::create_dir_all(&history).map_err(|e| e.to_string())?;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        let destination = history.join(format!("session-{timestamp}-{}.json", std::process::id()));
-        let mut archive = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&destination)
-            .map_err(|e| format!("Não foi possível arquivar a sessão: {e}"))?;
-        if let Err(error) = archive.write_all(&bytes).and_then(|_| archive.sync_all()) {
-            drop(archive);
-            let _ = fs::remove_file(&destination);
-            return Err(format!("Não foi possível arquivar a sessão: {error}"));
+            .ok_or("Pasta de backup inválida.")?
+            .join("History");
+        let history =
+            fs::canonicalize(history).map_err(|e| format!("Histórico indisponível: {e}"))?;
+        let selected =
+            fs::canonicalize(selected).map_err(|e| format!("Backup indisponível: {e}"))?;
+        if selected.parent() != Some(history.as_path()) {
+            return Err(
+                "Selecione um arquivo diretamente da pasta de histórico deste aplicativo.".into(),
+            );
         }
-        drop(archive);
-        fs::remove_file(&self.session_file).map_err(|e| {
-            format!("O arquivo foi preservado, mas o registro ativo não pôde ser liberado: {e}")
-        })?;
-        Ok(destination)
+        let file =
+            File::open(selected).map_err(|e| format!("Não foi possível abrir o backup: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_JOURNAL_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err("Backup excede o tamanho permitido.".into());
+        }
+        let journal: Journal =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Backup inválido: {e}"))?;
+        crate::transaction::validate(&journal)?;
+        Store::save(self, &journal)
     }
+}
+
+fn archive_record(source: &std::path::Path, prefix: &str, limit: usize) -> Result<PathBuf, String> {
+    let file = File::open(source).map_err(|e| format!("Não foi possível abrir o registro: {e}"))?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > limit {
+        return Err("O registro é grande demais para arquivar automaticamente.".into());
+    }
+    let parent = source.parent().ok_or("Pasta de backup inválida.")?;
+    let history = parent.join("History");
+    fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let destination = history.join(format!("{prefix}-{timestamp}-{}.json", std::process::id()));
+    let mut archive = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|e| format!("Não foi possível arquivar o registro: {e}"))?;
+    if let Err(error) = archive.write_all(&bytes).and_then(|_| archive.sync_all()) {
+        drop(archive);
+        let _ = fs::remove_file(&destination);
+        return Err(format!("Não foi possível arquivar o registro: {error}"));
+    }
+    drop(archive);
+    fs::remove_file(source).map_err(|e| {
+        format!("O arquivo foi preservado, mas o registro ativo não pôde ser liberado: {e}")
+    })?;
+    Ok(destination)
 }
 
 impl SessionStore for FileStore {
@@ -288,6 +325,66 @@ mod tests {
                 serde_json::from_slice(&fs::read(archived).unwrap()).unwrap();
             assert_eq!(persisted, value);
             assert!(store.load_session().unwrap().is_none());
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn archive_backup_keeps_a_copy_and_frees_the_slot() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("backup-archive-{unique}"));
+        let journal = Journal {
+            schema: 1,
+            entries: vec![Entry {
+                setting: Setting::GameMode,
+                original: None,
+                applied: Value::dword(1),
+            }],
+        };
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            store.save(&journal).unwrap();
+            let path = store.archive_backup().unwrap();
+            let saved: Journal = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(saved, journal);
+            assert!(store.load().unwrap().is_none());
+            store.activate_backup(&path).unwrap();
+            assert_eq!(store.load().unwrap(), Some(journal));
+            assert!(store.activate_backup(&path).is_err());
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn activation_rejects_a_file_outside_history() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("backup-outside-{unique}"));
+        fs::create_dir_all(directory.join("History")).unwrap();
+        let outsider = directory.join("elsewhere.json");
+        fs::write(&outsider, b"{}").unwrap();
+        let tampered = directory.join("History").join("tampered.json");
+        let journal = Journal {
+            schema: 1,
+            entries: vec![Entry {
+                setting: Setting::GameMode,
+                original: None,
+                applied: Value::dword(0),
+            }],
+        };
+        fs::write(&tampered, serde_json::to_vec(&journal).unwrap()).unwrap();
+        {
+            let mut store = FileStore::acquire(directory.clone()).unwrap();
+            assert!(store.activate_backup(&outsider).is_err());
+            assert!(store.activate_backup(&tampered).is_err());
+            assert!(store.load().unwrap().is_none());
         }
         fs::remove_dir_all(directory).unwrap();
     }

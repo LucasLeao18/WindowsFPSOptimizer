@@ -184,7 +184,7 @@ pub fn restore<B: Backend, S: Store>(
     Ok(report)
 }
 
-fn validate(journal: &Journal) -> Result<(), String> {
+pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
     if journal.schema != 1 || journal.entries.len() > 3 {
         return Err("Backup incompatível ou inválido.".into());
     }

@@ -43,6 +43,8 @@ struct Preferences {
     schema: u8,
     onboarded: bool,
     advanced: bool,
+    #[serde(default)]
+    last_game: Option<PathBuf>,
 }
 
 pub struct App {
@@ -53,19 +55,34 @@ pub struct App {
     confirm: bool,
     confirm_session: bool,
     confirm_archive_session: bool,
+    confirm_archive_backup: bool,
     game_path: Option<PathBuf>,
     session_notice: String,
     next_session_check: Instant,
     status: String,
+    status_error: bool,
     receiver: Option<Receiver<JobResult>>,
     before: Option<Capture>,
     after: Option<Capture>,
     diagnostics: Option<Snapshot>,
     temp_estimate: Option<Estimate>,
     processes: Option<Inventory>,
+    smoke_frames: Option<u8>,
 }
 
 impl App {
+    fn set_status(&mut self, result: Result<(), String>, success: &str) {
+        match result {
+            Ok(()) => {
+                self.status_error = false;
+                self.status = success.into();
+            }
+            Err(error) => {
+                self.status_error = true;
+                self.status = error;
+            }
+        }
+    }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         let mut visuals = egui::Visuals::dark();
@@ -87,6 +104,7 @@ impl App {
                 .insert(egui::TextStyle::Heading, egui::FontId::proportional(24.0));
         });
         let preferences = load_preferences();
+        let game_path = preferences.last_game.clone();
         Self {
             preset: Preset::Safe,
             preferences,
@@ -95,22 +113,28 @@ impl App {
             confirm: false,
             confirm_session: false,
             confirm_archive_session: false,
-            game_path: None,
+            confirm_archive_backup: false,
+            game_path,
             session_notice: String::new(),
             next_session_check: Instant::now(),
             status: "Selecione um perfil e faça uma análise antes de aplicar.".into(),
+            status_error: false,
             receiver: None,
             before: None,
             after: None,
             diagnostics: None,
             temp_estimate: None,
             processes: None,
+            smoke_frames: std::env::args_os()
+                .any(|arg| arg == "--smoke-test")
+                .then_some(0),
         }
     }
     fn run(&mut self, ctx: &egui::Context, action: impl FnOnce() -> JobResult + Send + 'static) {
         if self.receiver.is_some() {
             return;
         }
+        self.status_error = false;
         let (tx, rx) = mpsc::channel();
         self.receiver = Some(rx);
         let ctx = ctx.clone();
@@ -127,6 +151,19 @@ impl App {
         match receiver.try_recv() {
             Ok(result) => {
                 self.receiver = None;
+                if !matches!(&result, JobResult::SessionChecked(_)) {
+                    self.status_error = matches!(
+                        &result,
+                        JobResult::Preview(Err(_))
+                            | JobResult::Applied(Err(_))
+                            | JobResult::Restored(Err(_))
+                            | JobResult::Capture(_, Err(_))
+                            | JobResult::SessionStarted(Err(_))
+                            | JobResult::SessionStopped(Err(_))
+                            | JobResult::TempEstimate(Err(_))
+                            | JobResult::ProcessInventory(Err(_))
+                    );
+                }
                 match result {
                     JobResult::Preview(Ok(preview)) => {
                         if preview.preset == self.preset {
@@ -202,6 +239,7 @@ impl App {
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.receiver = None;
+                self.status_error = true;
                 self.status =
                     "A operação foi interrompida. Verifique o backup antes de tentar novamente."
                         .into();
@@ -214,9 +252,19 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         let ctx = ui.ctx().clone();
+        if let Some(frames) = &mut self.smoke_frames {
+            *frames = frames.saturating_add(1);
+            if *frames >= 3 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
         if self.receiver.is_none() && Instant::now() >= self.next_session_check {
             self.next_session_check = Instant::now() + Duration::from_secs(5);
+            let was_error = self.status_error;
             self.run(&ctx, || JobResult::SessionChecked(check_session()));
+            self.status_error = was_error;
         }
         ctx.request_repaint_after(Duration::from_secs(5));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(15, 19, 29)).inner_margin(egui::Margin::symmetric(30, 20))).show(ui, |ui| {
@@ -228,7 +276,7 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Primeiros passos").clicked() { self.onboarding_step = 0; self.preferences.onboarded = false; }
                         let label = if self.preferences.advanced { "Interface simplificada" } else { "Interface avançada" };
-                        if ui.button(label).clicked() { self.preferences.advanced = !self.preferences.advanced; self.status = save_preferences(&self.preferences).err().unwrap_or_else(|| "Preferência de interface salva.".into()); }
+                        if ui.button(label).clicked() { self.preferences.advanced = !self.preferences.advanced; self.set_status(save_preferences(&self.preferences), "Preferência de interface salva."); }
                     });
                 });
                 ui.add_space(20.0);
@@ -244,9 +292,9 @@ impl eframe::App for App {
                     if self.onboarding_step == 2 { ui.checkbox(&mut self.preferences.advanced, "Começar na interface avançada"); }
                     ui.horizontal(|ui| {
                         if self.onboarding_step > 0 && ui.button("Voltar").clicked() { self.onboarding_step -= 1; }
-                        if ui.button("Pular").clicked() { self.preferences.onboarded = true; self.status = save_preferences(&self.preferences).err().unwrap_or_else(|| "Selecione um perfil e faça uma análise antes de aplicar.".into()); }
+                        if ui.button("Pular").clicked() { self.preferences.onboarded = true; self.set_status(save_preferences(&self.preferences), "Selecione um perfil e faça uma análise antes de aplicar."); }
                         if ui.button(if self.onboarding_step == 2 { "Começar" } else { "Continuar" }).clicked() {
-                            if self.onboarding_step < 2 { self.onboarding_step += 1; } else { self.preferences.onboarded = true; self.status = save_preferences(&self.preferences).err().unwrap_or_else(|| "Selecione um perfil e faça uma análise antes de aplicar.".into()); }
+                            if self.onboarding_step < 2 { self.onboarding_step += 1; } else { self.preferences.onboarded = true; self.set_status(save_preferences(&self.preferences), "Selecione um perfil e faça uma análise antes de aplicar."); }
                         }
                     });
                     return;
@@ -256,7 +304,11 @@ impl eframe::App for App {
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
                     for preset in [Preset::Safe, Preset::Balanced, Preset::MaximumFps] {
-                        if ui.selectable_value(&mut self.preset, preset, preset.name()).changed() { self.preview = None; self.confirm = false; self.status = "Perfil selecionado. Faça uma nova análise antes de aplicar.".into(); }
+                        if ui.selectable_value(&mut self.preset, preset, preset.name()).changed() {
+                            self.preview = None; self.confirm = false; self.confirm_session = false; self.confirm_archive_session = false; self.confirm_archive_backup = false;
+                            self.status_error = false;
+                            self.status = if preset == Preset::MaximumFps { "Selecione o executável do jogo para iniciar a sessão." } else { "Perfil selecionado. Faça uma nova análise antes de aplicar." }.into();
+                        }
                     }
                 });
                 ui.add_space(12.0);
@@ -265,14 +317,25 @@ impl eframe::App for App {
                     Preset::Balanced => "Inclui os ajustes do perfil Seguro quando a memória virtual já é gerenciada pelo Windows. Se estiver manual, revise-a nas opções avançadas do sistema.",
                     Preset::MaximumFps => "Inicia o executável selecionado e tenta elevar sua prioridade para Acima do normal. A prioridade pode ser restaurada sem fechar o jogo; o resultado varia conforme o jogo e o computador.",
                 });
+                if self.preset == Preset::Balanced {
+                    ui.label("Se necessário: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual > Alterar, e escolha o gerenciamento automático. A mudança pode exigir administrador e reinicialização.");
+                    if ui.button("Abrir informações do sistema").clicked() {
+                        self.set_status(open_windows_settings(SettingsPage::About), "Configurações abertas. A localização dos controles pode variar.");
+                    }
+                }
                 ui.add_space(12.0);
                 if self.preset == Preset::MaximumFps {
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Selecionar jogo (.exe)")).clicked()
                             && let Some(path) = rfd::FileDialog::new().add_filter("Executável", &["exe"]).pick_file() {
-                            self.game_path = Some(path);
+                            self.game_path = Some(path.clone()); self.preferences.last_game = Some(path);
+                            self.set_status(save_preferences(&self.preferences), "Jogo selecionado.");
                         }
                         if ui.add_enabled(self.receiver.is_none() && self.game_path.is_some(), egui::Button::new("Iniciar jogo e sessão")).clicked() { self.confirm_session = true; }
+                        if ui.add_enabled(self.receiver.is_none() && self.game_path.is_some(), egui::Button::new("Esquecer jogo salvo")).clicked() {
+                            self.game_path = None; self.preferences.last_game = None;
+                            self.set_status(save_preferences(&self.preferences), "Jogo removido das preferências.");
+                        }
                         if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar prioridade da sessão")).clicked() {
                             self.status = "Verificando a sessão...".into(); self.run(&ctx, || JobResult::SessionStopped(stop_session()));
                         }
@@ -303,22 +366,31 @@ impl eframe::App for App {
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Abrir Modo de Jogo no Windows").clicked() {
-                        self.status = open_windows_settings(SettingsPage::GameMode).err().unwrap_or_else(|| "Configurações abertas. Confira o estado diretamente no Windows.".into());
+                        self.set_status(open_windows_settings(SettingsPage::GameMode), "Configurações abertas. Confira o estado diretamente no Windows.");
                     }
                     if ui.button("Abrir configurações de captura").clicked() {
-                        self.status = open_windows_settings(SettingsPage::Capture).err().unwrap_or_else(|| "Configurações abertas. A disponibilidade depende da edição e das políticas do Windows.".into());
+                        self.set_status(open_windows_settings(SettingsPage::Capture), "Configurações abertas. A disponibilidade depende da edição e das políticas do Windows.");
                     }
                 });
                 ui.separator();
-                ui.label(RichText::new(&self.status).color(Color32::from_rgb(190, 220, 160)));
+                ui.label(RichText::new(&self.status).color(if self.status_error { Color32::from_rgb(255, 160, 150) } else { Color32::from_rgb(190, 220, 160) }));
                 if !self.session_notice.is_empty() { ui.label(&self.session_notice); }
                 if self.preferences.advanced {
+                    ui.add_space(24.0);
+                    ui.heading("Recuperação");
+                    ui.label("Se houver conflito, você pode preservar os valores atuais e arquivar o backup ativo para liberar uma nova análise.");
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backup sem restaurar")).clicked() { self.confirm_archive_backup = true; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup arquivado")).clicked() {
+                        let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                        if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
+                        if let Some(path) = dialog.pick_file() { self.run(&ctx, move || JobResult::Restored(activate_backup(path))); }
+                    }
                     ui.add_space(24.0);
                     ui.heading("Configurações do Windows");
                     ui.label("Abra os controles oficiais para revisar gráficos, inicialização, energia ou armazenamento. Algumas páginas dependem da versão do Windows.");
                     ui.horizontal_wrapped(|ui| {
                         for (label, page) in [("Gráficos por aplicativo", SettingsPage::Graphics), ("Aplicativos de inicialização", SettingsPage::Startup), ("Energia e suspensão", SettingsPage::Power), ("Armazenamento", SettingsPage::Storage)] {
-                            if ui.button(label).clicked() { self.status = open_windows_settings(page).err().unwrap_or_else(|| "Configurações abertas; a página pode variar conforme o Windows.".into()); }
+                            if ui.button(label).clicked() { self.set_status(open_windows_settings(page), "Configurações abertas; a página pode variar conforme o Windows."); }
                         }
                     });
                     ui.add_space(24.0);
@@ -425,6 +497,18 @@ impl eframe::App for App {
                 });
             });
         }
+        if self.confirm_archive_backup {
+            egui::Window::new("Arquivar backup ativo").collapsible(false).resizable(false).show(&ctx, |ui| {
+                ui.label("As configurações atuais serão mantidas. O arquivo será guardado no histórico; para restaurá-lo depois, reative-o e use Restaurar último backup.");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_archive_backup = false; }
+                    if ui.button("Arquivar e manter configurações").clicked() {
+                        self.confirm_archive_backup = false;
+                        self.run(&ctx, || JobResult::Restored(archive_backup()));
+                    }
+                });
+            });
+        }
     }
 }
 
@@ -458,6 +542,7 @@ enum SettingsPage {
     Startup,
     Power,
     Storage,
+    About,
 }
 
 #[cfg(windows)]
@@ -471,6 +556,7 @@ fn open_windows_settings(page: SettingsPage) -> Result<(), String> {
         SettingsPage::Startup => "ms-settings:startupapps",
         SettingsPage::Power => "ms-settings:powersleep",
         SettingsPage::Storage => "ms-settings:storagesense",
+        SettingsPage::About => "ms-settings:about",
     };
     let uri: Vec<u16> = uri.encode_utf16().chain(Some(0)).collect();
     let result = unsafe {
@@ -644,6 +730,25 @@ fn archive_session() -> Result<String, String> {
         path.display()
     ))
 }
+#[cfg(windows)]
+fn archive_backup() -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    let path = store.archive_backup()?;
+    Ok(format!(
+        "Backup arquivado em {}. As configurações atuais foram preservadas.",
+        path.display()
+    ))
+}
+#[cfg(windows)]
+fn activate_backup(path: PathBuf) -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    store.activate_backup(&path)?;
+    Ok("Backup reativado. Use Restaurar último backup para restaurar os valores elegíveis.".into())
+}
+#[cfg(windows)]
+fn history_path() -> Option<PathBuf> {
+    engine::state_directory().ok().map(|p| p.join("History"))
+}
 
 #[cfg(not(windows))]
 fn start_session(_: PathBuf) -> Result<String, String> {
@@ -660,6 +765,18 @@ fn check_session() -> Result<SessionCheck, String> {
 #[cfg(not(windows))]
 fn archive_session() -> Result<String, String> {
     Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn archive_backup() -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn activate_backup(_: PathBuf) -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn history_path() -> Option<PathBuf> {
+    None
 }
 #[cfg(not(windows))]
 fn preview_system(_: Preset) -> Result<Preview, String> {
@@ -689,6 +806,7 @@ fn load_preferences() -> Preferences {
         schema: 1,
         onboarded: false,
         advanced: false,
+        last_game: None,
     };
     let Some(path) = preferences_path() else {
         return default;
@@ -708,4 +826,16 @@ fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     let bytes = serde_json::to_vec(preferences).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Não foi possível salvar a preferência: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn old_preferences_remain_readable_without_a_game_path() {
+        let input = r#"{"schema":1,"onboarded":true,"advanced":false}"#;
+        let preferences: Preferences = serde_json::from_str(input).unwrap();
+        assert!(preferences.onboarded);
+        assert!(preferences.last_game.is_none());
+    }
 }
