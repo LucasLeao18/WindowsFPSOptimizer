@@ -5,6 +5,7 @@ pub mod compatibility;
 pub mod diagnostics;
 pub mod engine;
 pub mod pagefile;
+pub mod process_inventory;
 pub mod session;
 pub mod storage;
 pub mod temp_scan;

@@ -13,6 +13,7 @@ use windows_fps_optimizer::{
     compatibility,
     diagnostics::{self, PowerSource, Snapshot},
     engine::{self, Preview},
+    process_inventory::{self, Inventory},
     storage::FileStore,
     temp_scan::{self, Estimate},
     transaction::Setting,
@@ -28,6 +29,7 @@ enum JobResult {
     SessionChecked(Result<SessionCheck, String>),
     Diagnostics(Snapshot),
     TempEstimate(Result<Estimate, String>),
+    ProcessInventory(Result<Inventory, String>),
 }
 
 enum SessionCheck {
@@ -60,6 +62,7 @@ pub struct App {
     after: Option<Capture>,
     diagnostics: Option<Snapshot>,
     temp_estimate: Option<Estimate>,
+    processes: Option<Inventory>,
 }
 
 impl App {
@@ -101,6 +104,7 @@ impl App {
             after: None,
             diagnostics: None,
             temp_estimate: None,
+            processes: None,
         }
     }
     fn run(&mut self, ctx: &egui::Context, action: impl FnOnce() -> JobResult + Send + 'static) {
@@ -169,6 +173,10 @@ impl App {
                         self.temp_estimate = Some(estimate);
                         self.status = "Estimativa concluída; nenhum arquivo foi removido.".into();
                     }
+                    JobResult::ProcessInventory(Ok(inventory)) => {
+                        self.processes = Some(inventory);
+                        self.status = "Lista de processos atualizada.".into();
+                    }
                     JobResult::Capture(before, Ok(capture)) => {
                         if before {
                             self.before = Some(capture);
@@ -183,6 +191,7 @@ impl App {
                     | JobResult::SessionStarted(Err(error))
                     | JobResult::SessionStopped(Err(error))
                     | JobResult::TempEstimate(Err(error))
+                    | JobResult::ProcessInventory(Err(error))
                     | JobResult::Capture(_, Err(error)) => self.status = error,
                     JobResult::SessionChecked(Err(error)) => {
                         self.session_notice =
@@ -305,6 +314,14 @@ impl eframe::App for App {
                 if !self.session_notice.is_empty() { ui.label(&self.session_notice); }
                 if self.preferences.advanced {
                     ui.add_space(24.0);
+                    ui.heading("Configurações do Windows");
+                    ui.label("Abra os controles oficiais para revisar gráficos, inicialização, energia ou armazenamento. Algumas páginas dependem da versão do Windows.");
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, page) in [("Gráficos por aplicativo", SettingsPage::Graphics), ("Aplicativos de inicialização", SettingsPage::Startup), ("Energia e suspensão", SettingsPage::Power), ("Armazenamento", SettingsPage::Storage)] {
+                            if ui.button(label).clicked() { self.status = open_windows_settings(page).err().unwrap_or_else(|| "Configurações abertas; a página pode variar conforme o Windows.".into()); }
+                        }
+                    });
+                    ui.add_space(24.0);
                     ui.heading("Diagnóstico do computador");
                     ui.label("Informações atuais, sem alterar o Windows.");
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Atualizar diagnóstico")).clicked() {
@@ -314,10 +331,24 @@ impl eframe::App for App {
                         if let (Some(available), Some(total)) = (snapshot.available_memory, snapshot.total_memory) {
                             ui.label(format!("Memória RAM disponível: {:.1} de {:.1} GiB", available as f64 / 1073741824.0, total as f64 / 1073741824.0));
                         }
+                        if let Some(available) = snapshot.system_disk_available { ui.label(format!("Espaço disponível para este usuário no disco do Windows: {:.1} GiB", available as f64 / 1073741824.0)); }
                         if let Some(cores) = snapshot.logical_processors_available { ui.label(format!("Processadores lógicos disponíveis ao aplicativo: {cores}")); }
                         ui.label(match snapshot.power { PowerSource::Ac => "Energia: conectado à tomada", PowerSource::Battery => "Energia: usando bateria", PowerSource::Unknown => "Energia: estado indisponível" });
+                        if let Some(plan) = &snapshot.active_power_plan { ui.label(format!("Plano de energia ativo: {plan}")); }
                         if let Some(percent) = snapshot.battery_percent { ui.label(format!("Bateria: {percent}%")); }
                         if snapshot.battery_saver == Some(true) { ui.label("Economia de bateria está ativada."); }
+                    }
+                    ui.add_space(24.0);
+                    ui.heading("Processos em execução");
+                    ui.label("Consulta pontual: a lista pode mudar a qualquer momento. Nenhum processo será encerrado.");
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Listar processos")).clicked() {
+                        self.status = "Consultando processos...".into(); self.run(&ctx, || JobResult::ProcessInventory(process_inventory::collect()));
+                    }
+                    if let Some(inventory) = &self.processes {
+                        ui.label(format!("{} processo(s) listado(s){}", inventory.processes.len(), if inventory.truncated { " (lista limitada)" } else { "" }));
+                        egui::ScrollArea::vertical().id_salt("process-list").max_height(260.0).show_rows(ui, 24.0, inventory.processes.len(), |ui, rows| {
+                            for index in rows { let process = &inventory.processes[index]; ui.label(format!("{}  •  PID {}  •  {} thread(s)", process.name, process.pid, process.threads)); }
+                        });
                     }
                     ui.add_space(24.0);
                     ui.heading("Arquivos temporários");
@@ -423,6 +454,10 @@ fn display_value(value: Option<&windows_fps_optimizer::transaction::Value>) -> S
 enum SettingsPage {
     GameMode,
     Capture,
+    Graphics,
+    Startup,
+    Power,
+    Storage,
 }
 
 #[cfg(windows)]
@@ -432,6 +467,10 @@ fn open_windows_settings(page: SettingsPage) -> Result<(), String> {
     let uri = match page {
         SettingsPage::GameMode => "ms-settings:gaming-gamemode",
         SettingsPage::Capture => "ms-settings:gaming-gamedvr",
+        SettingsPage::Graphics => "ms-settings:display-advancedgraphics",
+        SettingsPage::Startup => "ms-settings:startupapps",
+        SettingsPage::Power => "ms-settings:powersleep",
+        SettingsPage::Storage => "ms-settings:storagesense",
     };
     let uri: Vec<u16> = uri.encode_utf16().chain(Some(0)).collect();
     let result = unsafe {
