@@ -105,6 +105,7 @@ impl Preferences {
 pub struct App {
     preset: Preset,
     preferences: Preferences,
+    legacy_backups: bool,
     onboarding_step: u8,
     preview: Option<Preview>,
     confirm: bool,
@@ -179,6 +180,7 @@ impl App {
         Self {
             preset: Preset::Safe,
             preferences,
+            legacy_backups: legacy_backups_present(),
             onboarding_step: 0,
             preview: None,
             confirm: false,
@@ -469,6 +471,9 @@ impl eframe::App for App {
                     return;
                 }
                 ui.heading("Seu Windows, suas escolhas");
+                if self.legacy_backups {
+                    ui.colored_label(Color32::from_rgb(255, 203, 113), "Podem existir backups da versão anterior neste computador. Para restaurar alterações daquela versão, use a própria versão anterior; esta versão ainda não importa esses backups.");
+                }
                 ui.label("Escolha um dos três perfis. O aplicativo mostra o que é compatível com este computador.");
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
@@ -1067,24 +1072,11 @@ pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
         engine::preview(backend, store, version, preset, pagefile)
     })?;
     if legacy_backups_present() {
-        preview.notes.push("Backups da versão anterior foram encontrados. Esta versão ainda não os restaura; mantenha a versão anterior para acessá-los.".into());
+        preview.notes.push("Podem existir backups da versão anterior. Esta versão ainda não os restaura; mantenha a versão anterior para acessá-los.".into());
     }
     Ok(preview)
 }
 
-#[cfg(windows)]
-fn legacy_backups_present() -> bool {
-    let Some(root) = std::env::var_os("LOCALAPPDATA") else {
-        return false;
-    };
-    let path = PathBuf::from(root)
-        .join("WindowsFPSOptimizer")
-        .join("Backups");
-    match std::fs::read_dir(path) {
-        Ok(mut entries) => entries.next().is_some(),
-        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-    }
-}
 #[cfg(windows)]
 pub(crate) fn apply_system(preview: Preview) -> Result<(), String> {
     let version = compatibility::detect()?;
@@ -1772,6 +1764,23 @@ fn apply_system(_: Preview) -> Result<(), String> {
 #[cfg(not(windows))]
 fn restore_system() -> Result<String, String> {
     Err("Este aplicativo requer Windows.".into())
+}
+
+pub(crate) fn legacy_backups_present() -> bool {
+    let Some(root) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else {
+        return false;
+    };
+    if !root.is_absolute() || root.to_string_lossy().starts_with(r"\\") {
+        return false;
+    }
+    let root = root.join("WindowsFPSOptimizer");
+    if root.join("State").join("current-backup.json").is_file() {
+        return true;
+    }
+    match std::fs::read_dir(root.join("Backups")) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 fn preferences_path() -> Option<PathBuf> {

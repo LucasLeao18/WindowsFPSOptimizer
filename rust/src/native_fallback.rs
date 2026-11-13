@@ -444,10 +444,16 @@ pub fn run(smoke: bool) -> Result<(), String> {
         )?;
         let output_top = flow.next_y();
         let output_height = (client_height - output_top - 12).max(100);
+        let mut introduction = String::from(
+            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nSeguro e Equilibrado: escolha o perfil e clique em Analisar.\r\nMáximo FPS: selecione o jogo e clique em Aplicar / iniciar.\r\nA limpeza de temporários é opcional e exige análise e confirmação. Outras ferramentas avançadas exigem a interface completa.",
+        );
+        if app::legacy_backups_present() {
+            introduction.push_str("\r\n\r\nPodem existir backups da versão anterior neste computador. Para restaurar alterações daquela versão, use a própria versão anterior; esta versão ainda não importa esses backups.");
+        }
         let output = child(
             window,
             "EDIT",
-            "Este modo não depende de OpenGL ou DirectX.\r\n\r\nSeguro e Equilibrado: escolha o perfil e clique em Analisar.\r\nMáximo FPS: selecione o jogo e clique em Aplicar / iniciar.\r\nA limpeza de temporários é opcional e exige análise e confirmação. Outras ferramentas avançadas exigem a interface completa.",
+            &introduction,
             WS_BORDER
                 | WS_VSCROLL
                 | ES_MULTILINE as u32
