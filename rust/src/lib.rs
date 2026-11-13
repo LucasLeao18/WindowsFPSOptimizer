@@ -113,4 +113,9 @@ mod tests {
 }
 pub mod power_session;
 #[cfg(windows)]
+pub mod temp_cleanup;
+#[cfg(not(windows))]
+#[path = "temp_cleanup_stub.rs"]
+pub mod temp_cleanup;
+#[cfg(windows)]
 pub mod windows_power;

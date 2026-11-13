@@ -16,7 +16,7 @@ use windows_fps_optimizer::{
     process_control::{self, Candidate, Termination},
     process_inventory::{self, Inventory, Process as ListedProcess},
     storage::FileStore,
-    temp_scan::{self, Estimate},
+    temp_cleanup::{self, Plan as CleanupPlan, Report as CleanupReport},
     transaction::Setting,
 };
 
@@ -29,7 +29,8 @@ enum JobResult {
     SessionStopped(Result<String, String>),
     SessionChecked(Result<SessionCheck, String>),
     Diagnostics(Snapshot),
-    TempEstimate(Result<Estimate, String>),
+    TempEstimate(Result<CleanupPlan, String>),
+    TempCleanup(Result<CleanupReport, String>),
     ProcessInventory(Result<Inventory, String>),
     ProcessInspection(Result<Candidate, String>),
     ProcessTerminated(Result<Termination, String>),
@@ -102,7 +103,8 @@ pub struct App {
     before: Option<Capture>,
     after: Option<Capture>,
     diagnostics: Option<Snapshot>,
-    temp_estimate: Option<Estimate>,
+    temp_plan: Option<CleanupPlan>,
+    confirm_temp: bool,
     processes: Option<Inventory>,
     selected_process: Option<ListedProcess>,
     process_candidate: Option<Candidate>,
@@ -163,7 +165,8 @@ impl App {
             before: None,
             after: None,
             diagnostics: None,
-            temp_estimate: None,
+            temp_plan: None,
+            confirm_temp: false,
             processes: None,
             selected_process: None,
             process_candidate: None,
@@ -204,6 +207,7 @@ impl App {
                             | JobResult::SessionStarted(Err(_))
                             | JobResult::SessionStopped(Err(_))
                             | JobResult::TempEstimate(Err(_))
+                            | JobResult::TempCleanup(Err(_))
                             | JobResult::ProcessInventory(Err(_))
                             | JobResult::ProcessInspection(Err(_))
                             | JobResult::ProcessTerminated(Err(_))
@@ -251,9 +255,17 @@ impl App {
                         self.diagnostics = Some(snapshot);
                         self.status = "Diagnóstico atualizado.".into();
                     }
-                    JobResult::TempEstimate(Ok(estimate)) => {
-                        self.temp_estimate = Some(estimate);
-                        self.status = "Estimativa concluída; nenhum arquivo foi removido.".into();
+                    JobResult::TempEstimate(Ok(plan)) => {
+                        self.temp_plan = Some(plan);
+                        self.status = "Análise concluída; nenhum arquivo foi removido.".into();
+                    }
+                    JobResult::TempCleanup(Ok(report)) => {
+                        self.status = format!(
+                            "{} arquivo(s) marcados para exclusão ({:.1} MiB); {} item(ns) preservados por mudança ou acesso indisponível.",
+                            report.marked,
+                            report.bytes as f64 / 1048576.0,
+                            report.skipped
+                        );
                     }
                     JobResult::ProcessInventory(Ok(inventory)) => {
                         self.processes = Some(inventory);
@@ -299,6 +311,7 @@ impl App {
                     | JobResult::SessionStarted(Err(error))
                     | JobResult::SessionStopped(Err(error))
                     | JobResult::TempEstimate(Err(error))
+                    | JobResult::TempCleanup(Err(error))
                     | JobResult::ProcessInventory(Err(error))
                     | JobResult::ProcessInspection(Err(error))
                     | JobResult::ProcessTerminated(Err(error))
@@ -530,13 +543,16 @@ impl eframe::App for App {
                     }
                     ui.add_space(24.0);
                     ui.heading("Arquivos temporários");
-                    ui.label("Estime arquivos com mais de sete dias diretamente na pasta temporária; subpastas não são incluídas.");
-                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Estimar sem remover arquivos")).clicked() {
-                        self.status = "Estimando arquivos temporários...".into(); self.run(&ctx, || JobResult::TempEstimate(temp_scan::estimate_user_temp()));
+                    ui.label("Analise arquivos com mais de sete dias diretamente na pasta temporária do usuário; subpastas não são incluídas.");
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Analisar sem remover arquivos")).clicked() {
+                        self.temp_plan = None; self.confirm_temp = false;
+                        self.status = "Analisando arquivos temporários...".into(); self.run(&ctx, || JobResult::TempEstimate(temp_cleanup::plan_user_temp()));
                     }
-                    if let Some(estimate) = self.temp_estimate {
-                        ui.label(format!("{} arquivo(s), {:.1} MiB estimados.", estimate.files, estimate.bytes as f64 / 1048576.0));
-                        if estimate.skipped > 0 || estimate.truncated { ui.label("A estimativa é parcial porque alguns itens não puderam ser lidos ou o limite foi atingido."); }
+                    if let Some(plan) = &self.temp_plan {
+                        ui.label(format!("Pasta: {}", plan.folder().display()));
+                        ui.label(format!("{} arquivo(s), {:.1} MiB analisados.", plan.files(), plan.bytes as f64 / 1048576.0));
+                        if plan.skipped > 0 || plan.truncated { ui.label("A análise é parcial: alguns itens foram ignorados ou o limite foi atingido."); }
+                        if ui.add_enabled(self.receiver.is_none() && plan.files() > 0, egui::Button::new("Remover arquivos analisados")).clicked() { self.confirm_temp = true; }
                     }
                     ui.add_space(24.0);
                     ui.heading("Comparar capturas");
@@ -611,6 +627,19 @@ impl eframe::App for App {
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar e manter configurações")).clicked() {
                         self.confirm_archive_backup = false;
                         self.run(&ctx, || JobResult::Restored(archive_backup()));
+                    }
+                });
+            });
+        }
+        if self.confirm_temp {
+            egui::Window::new("Confirmar limpeza").collapsible(false).resizable(false).show(&ctx, |ui| {
+                if let Some(plan) = &self.temp_plan { ui.label(format!("Remover até {} arquivo(s) temporários analisados ({:.1} MiB)?", plan.files(), plan.bytes as f64 / 1048576.0)); }
+                ui.label("A exclusão é permanente e não usa a Lixeira. Arquivos que mudaram, estão em uso ou não puderem ser verificados serão preservados.");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() { self.confirm_temp = false; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Remover permanentemente")).clicked() {
+                        self.confirm_temp = false;
+                        if let Some(plan) = self.temp_plan.take() { self.status = "Verificando e removendo arquivos...".into(); self.run(&ctx, move || JobResult::TempCleanup(temp_cleanup::apply(&plan))); }
                     }
                 });
             });
