@@ -1,21 +1,50 @@
-# Reescrita em Rust — em desenvolvimento
+# Windows FPS Optimizer 2.0 (Rust)
 
-Esta pasta contém uma implementação independente ainda incompleta. Não distribua esta versão como substituta da versão publicada: os três perfis são parciais e várias funções avançadas ainda não foram implementadas ou validadas.
+Aplicativo nativo em Rust: um único executável portátil, sem instalador, sem PowerShell e sem dependência do Visual C++ Redistributable. Funciona no Windows 10 e no Windows 11, em computadores x64, x86 (32 bits) e ARM64.
 
-Há uma interface inicial acessível, análise e aplicação parcial dos perfis Seguro e Equilibrado, backup e restauração com detecção de conflitos, sessão de jogo, diagnóstico, inventário de processos e comparação de capturas CSV do PresentMon. A sessão tenta ajustar a prioridade do executável selecionado, reduzir efeitos visuais, ativar o plano Alto Desempenho quando este já existe e impedir temporariamente a suspensão automática enquanto o aplicativo e o processo estão abertos; ela não impede que a tela apague. Os valores anteriores de prioridade, efeitos visuais e energia são registrados separadamente. Um monitor tenta restaurá-los ao fim do jogo mesmo se a janela for fechada; conflitos ou falhas persistentes mantêm os registros para revisão. O encerramento de um processo é uma ação manual, sujeita a análise e confirmação; os perfis não encerram programas. O Equilibrado consulta a memória virtual quando possível, mas ainda não altera essa configuração nem implementa todas as opções adicionais da versão anterior. O Máximo FPS ainda não implementa os demais ajustes da sessão anterior e precisa de mais testes. A implementação não migra os backups da versão anterior. O aplicativo atual em PowerShell permanece intacto.
+## Perfis
 
-Na interface avançada, a limpeza de temporários é uma ação manual: analisa arquivos com mais de sete dias diretamente em `LocalAppData\Temp` e pede confirmação para removê-los permanentemente. Ela não percorre subpastas e preserva arquivos alterados desde a análise ou impossíveis de verificar. Nenhum perfil inicia a limpeza.
+| Perfil | O que faz |
+|---|---|
+| **Seguro** | Modo de Jogo, transparência e animações compatíveis. Cada mudança é mostrada antes da confirmação e salva para restauração. |
+| **Equilibrado** | Inclui o Seguro, desativa sombras do cursor e das janelas e, se a memória virtual estiver manual, devolve-a ao gerenciamento automático do Windows (exige administrador e vale após reiniciar). A configuração manual anterior é salva e pode ser restaurada exatamente. |
+| **Máximo FPS** | Inicia o jogo escolhido e, só durante a sessão, eleva a prioridade, reduz efeitos visuais, ativa o plano Alto Desempenho (se existir), impede a suspensão automática e, opcionalmente, para serviços escolhidos. Um monitor independente restaura tudo quando o jogo termina, mesmo se a janela do aplicativo for fechada. |
 
-A interface avançada também permite revisar e desativar individualmente entradas de inicialização da chave `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. O comando selecionado é exibido antes da confirmação, o valor é salvo e a alteração utiliza uma transação do Registro. Entradas protegidas e conflitos não são alterados; backups arquivados podem ser reativados a partir do histórico. Outras origens, incluindo entradas de máquina e atalhos na pasta de inicialização, ainda não foram portadas.
+Nenhum perfil promete ganho de FPS; use a comparação de capturas do PresentMon na interface avançada para medir.
 
-Serviços opcionais podem ser consultados e parados individualmente após confirmação, com aviso de impacto e registro para restauração. Na interface avançada, também podem ser escolhidos explicitamente para a sessão Máximo; o monitor tentará restaurar apenas os serviços associados àquele jogo. Nenhum serviço é selecionado por padrão. A operação não muda o tipo de inicialização e pode exigir executar o aplicativo como administrador. O gerenciamento de configurações permanentes de serviços ainda não foi portado.
+## Interface avançada
 
-A interface tenta OpenGL e, se a inicialização falhar antes de o aplicativo abrir, tenta um segundo renderizador. Se nenhum estiver disponível, abre uma interface nativa de compatibilidade com os três perfis, a recuperação de backups e a limpeza opcional de temporários; as demais ferramentas avançadas ainda exigem a interface completa. A disponibilidade depende do Windows, dos drivers e do ambiente gráfico; acesso remoto e máquinas virtuais também precisam de validação.
+- Recuperação: restaurar, arquivar e reativar backups, com detecção de conflitos.
+- Diagnóstico de memória, disco, processadores e energia, sem alterações.
+- Processos: encerramento manual com verificação de identidade; processos críticos, do Windows, serviços e elevados são protegidos.
+- Inicialização: desativar entradas de `HKCU\...\Run` com backup e transação do Registro.
+- Serviços opcionais: parar e restaurar individualmente (exige administrador).
+- Limpeza de temporários do usuário com mais de sete dias, após análise e confirmação.
+- Comparação de capturas CSV do PresentMon (FPS médio, 1% low, P95, P99).
 
-Com Rust e uma toolchain de link para Windows instalados:
+O botão **Reabrir como administrador** é necessário para memória virtual e serviços. Os demais recursos funcionam como usuário comum.
+
+## Compatibilidade
+
+- A interface tenta OpenGL, depois um segundo renderizador (wgpu) e, se nenhum funcionar, abre uma interface nativa do Windows com os três perfis, a recuperação e a limpeza. O objetivo é abrir também com drivers de vídeo antigos, em máquinas virtuais e por acesso remoto.
+- O runtime do C é estático: os executáveis só usam DLLs que fazem parte do Windows.
+- O manifesto declara Windows 10/11, DPI por monitor e caminhos longos; o aplicativo roda como usuário comum (`asInvoker`).
+- Backups da versão 1.x (PowerShell) não são importados. Para restaurá-los, use a versão 1.2.0, que continua disponível nas releases.
+
+## Compilar e gerar a release localmente
+
+Requisitos: [rustup](https://rustup.rs) e Visual Studio Build Tools com o workload **Desenvolvimento para desktop com C++**, incluindo **MSVC ARM64 build tools** e um Windows SDK.
 
 ```powershell
 cd rust
+powershell -ExecutionPolicy Bypass -File .\build-release.ps1
+```
+
+O script verifica formatação e lint, executa os testes (incluindo os de integração que não alteram o sistema), compila x64/x86/ARM64, confirma que não há DLLs de runtime do Visual C++, testa a abertura das três interfaces gráficas e o monitor de sessão, e grava os executáveis e o `SHA256SUMS.txt` em `rust\dist`. Nenhuma etapa depende de GitHub Actions.
+
+Desenvolvimento:
+
+```powershell
 cargo test
 cargo run
 ```

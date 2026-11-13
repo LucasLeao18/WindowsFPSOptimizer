@@ -24,7 +24,7 @@ use windows_fps_optimizer::{
 
 enum JobResult {
     Preview(Result<Preview, String>),
-    Applied(Result<(), String>),
+    Applied(Result<String, String>),
     Restored(Result<String, String>),
     Capture(bool, Result<Capture, String>),
     SessionStarted(Result<String, String>),
@@ -140,6 +140,7 @@ pub struct App {
     process_candidate: Option<Candidate>,
     confirm_process: bool,
     smoke_frames: Option<u8>,
+    elevated: bool,
 }
 
 impl App {
@@ -217,6 +218,7 @@ impl App {
             smoke_frames: std::env::args_os()
                 .any(|arg| arg == "--smoke-test")
                 .then_some(0),
+            elevated: process_control::current_process_elevated(),
         }
     }
     fn run(&mut self, ctx: &egui::Context, action: impl FnOnce() -> JobResult + Send + 'static) {
@@ -273,10 +275,9 @@ impl App {
                             self.status = "O perfil foi alterado. Faça uma nova análise.".into();
                         }
                     }
-                    JobResult::Applied(Ok(())) => {
+                    JobResult::Applied(Ok(message)) => {
                         self.preview = None;
-                        self.status =
-                            "Operação concluída. O backup fica disponível para restauração.".into();
+                        self.status = message;
                     }
                     JobResult::Restored(Ok(message)) => {
                         self.preview = None;
@@ -446,6 +447,12 @@ impl eframe::App for App {
                     ui.heading("Windows FPS Optimizer");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Primeiros passos").clicked() { self.onboarding_step = 0; self.preferences.onboarded = false; }
+                        if !self.elevated && ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reabrir como administrador")).on_hover_text("Necessário para memória virtual e serviços.").clicked() {
+                            match relaunch_elevated() {
+                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                                Err(error) => self.set_status(Err(error), ""),
+                            }
+                        }
                         let label = if self.preferences.advanced { "Interface simplificada" } else { "Interface avançada" };
                         if ui.button(label).clicked() { self.preferences.advanced = !self.preferences.advanced; self.set_status(save_preferences(&self.preferences), "Preferência de interface salva."); }
                     });
@@ -488,11 +495,11 @@ impl eframe::App for App {
                 ui.add_space(12.0);
                 ui.label(match self.preset {
                     Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
-                    Preset::Balanced => "Inclui os ajustes do perfil Seguro e também revisa sombras do cursor e de janelas compatíveis. Consulta a memória virtual sem alterá-la nesta versão.",
+                    Preset::Balanced => "Inclui os ajustes do perfil Seguro e também revisa sombras do cursor e de janelas compatíveis. Se a memória virtual estiver manual, devolve-a ao gerenciamento automático do Windows, com backup para restauração.",
                     Preset::MaximumFps => "Inicia o jogo e tenta ajustar prioridade, efeitos visuais e plano Alto Desempenho, além de impedir a suspensão. O plano pode aumentar consumo e temperatura; os valores anteriores são salvos para restauração.",
                 });
                 if self.preset == Preset::Balanced {
-                    ui.label("Se necessário: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual > Alterar, e escolha o gerenciamento automático. A mudança pode exigir administrador e reinicialização.");
+                    ui.label("A mudança de memória virtual exige executar o aplicativo como administrador e vale após reiniciar. Para conferir: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual.");
                     if ui.button("Abrir informações do sistema").clicked() {
                         self.set_status(open_windows_settings(SettingsPage::About), "Configurações abertas. A localização dos controles pode variar.");
                     }
@@ -550,7 +557,7 @@ impl eframe::App for App {
                         self.preview = None; self.status = "Analisando compatibilidade e backup...".into();
                         let preset = self.preset; self.run(&ctx, move || JobResult::Preview(preview_system(preset)));
                     }
-                    if ui.add_enabled(self.receiver.is_none() && self.preview.as_ref().is_some_and(|p| !p.journal.entries.is_empty()), egui::Button::new("Aplicar perfil")).clicked() { self.confirm = true; }
+                    if ui.add_enabled(self.receiver.is_none() && self.preview.as_ref().is_some_and(|p| p.has_changes()), egui::Button::new("Aplicar perfil")).clicked() { self.confirm = true; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Restaurar último backup")).clicked() {
                         self.status = "Restaurando configurações...".into(); self.run(&ctx, || JobResult::Restored(restore_system()));
                     }
@@ -561,7 +568,8 @@ impl eframe::App for App {
                 ui.add_space(10.0);
                 if let Some(preview) = &self.preview {
                     ui.label(RichText::new("O que será alterado").strong());
-                    if preview.journal.entries.is_empty() { ui.label("As opções automáticas já estão no estado solicitado."); }
+                    if !preview.has_changes() { ui.label("As opções automáticas já estão no estado solicitado."); }
+                    if preview.pagefile_to_automatic { ui.label("• Memória virtual: manual para gerenciada pelo Windows (requer administrador e reinício)"); }
                     for entry in &preview.journal.entries {
                         ui.label(format!("• {}: {} para {}", setting_name(entry.setting), display_value(entry.original.as_ref()), display_value(Some(&entry.applied))));
                     }
@@ -1002,6 +1010,37 @@ fn open_windows_settings(page: SettingsPage) -> Result<(), String> {
     }
 }
 
+/// Starts a new elevated copy of this executable through the UAC prompt.
+#[cfg(windows)]
+fn relaunch_elevated() -> Result<(), String> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Não foi possível localizar o aplicativo: {e}"))?;
+    let exe: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb: Vec<u16> = "runas".encode_utf16().chain(Some(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            verb.as_ptr(),
+            exe.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize <= 32 {
+        Err("O aplicativo não foi reaberto como administrador (a permissão pode ter sido recusada).".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn relaunch_elevated() -> Result<(), String> {
+    Err("Esta opção requer Windows.".into())
+}
+
 #[cfg(not(windows))]
 fn open_windows_settings(_: SettingsPage) -> Result<(), String> {
     Err("Esta opção requer Windows.".into())
@@ -1078,18 +1117,46 @@ pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
 }
 
 #[cfg(windows)]
-pub(crate) fn apply_system(preview: Preview) -> Result<(), String> {
+pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
+    use windows_fps_optimizer::{
+        pagefile_transaction::{self, BeginResult},
+        windows_pagefile::WindowsPagefile,
+    };
     let version = compatibility::detect()?;
     with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        engine::apply(backend, store, version, &preview, None)
+        engine::apply(backend, store, version, &preview, None)?;
+        let mut message =
+            String::from("Operação concluída. O backup fica disponível para restauração.");
+        if preview.pagefile_to_automatic {
+            if !process_control::current_process_elevated() {
+                message.push_str(" A memória virtual não foi alterada: execute o aplicativo como administrador para incluir esse ajuste.");
+            } else {
+                let mut pagefile = WindowsPagefile::default();
+                match pagefile_transaction::begin(&mut pagefile, store) {
+                    Ok(BeginResult::Applied) => message.push_str(" Memória virtual devolvida ao gerenciamento automático; reinicie o computador para aplicar."),
+                    Ok(BeginResult::AlreadyAutomatic) => message.push_str(" A memória virtual já era gerenciada pelo Windows."),
+                    Err(error) => {
+                        // An interrupted attempt that left the original layout intact
+                        // must not block later analyses.
+                        let _ = pagefile_transaction::restore(&mut pagefile, store);
+                        message.push_str(&format!(" A memória virtual não foi alterada: {error}"));
+                    }
+                }
+            }
+        }
+        Ok(message)
     })
 }
 #[cfg(windows)]
 pub(crate) fn restore_system() -> Result<String, String> {
     with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        let report = engine::restore(backend, store)?;
+        let pagefile = restore_pagefile(store)?;
+        let report = match engine::restore(backend, store) {
+            Err(_) if !pagefile.is_empty() => return Ok(pagefile.trim_start().to_string()),
+            other => other?,
+        };
         if !report.conflicts.is_empty() || !report.errors.is_empty() {
             let conflicts = report
                 .conflicts
@@ -1104,7 +1171,7 @@ pub(crate) fn restore_system() -> Result<String, String> {
                 .collect::<Vec<_>>()
                 .join("; ");
             return Ok(format!(
-                "Restauração parcial. Conflitos ou alterações de origem incerta: {}. Erros: {}. Os valores em conflito e o backup foram preservados; revise-os no Windows.",
+                "Restauração parcial. Conflitos ou alterações de origem incerta: {}. Erros: {}. Os valores em conflito e o backup foram preservados; revise-os no Windows.{pagefile}",
                 if conflicts.is_empty() {
                     "nenhum"
                 } else {
@@ -1114,10 +1181,38 @@ pub(crate) fn restore_system() -> Result<String, String> {
             ));
         }
         Ok(format!(
-            "Restauração concluída: {} ajuste(s) restaurado(s).",
+            "Restauração concluída: {} ajuste(s) restaurado(s).{pagefile}",
             report.restored.len()
         ))
     })
+}
+
+/// Restores a pending pagefile backup first, because it is independent of the
+/// per-user journal. Returns a sentence to append, or an empty string.
+#[cfg(windows)]
+fn restore_pagefile(store: &mut FileStore) -> Result<String, String> {
+    use windows_fps_optimizer::{
+        pagefile_transaction::{self, RestoreResult, Store as _},
+        windows_pagefile::WindowsPagefile,
+    };
+    if store.load_pagefile()?.is_none() {
+        return Ok(String::new());
+    }
+    if !process_control::current_process_elevated() {
+        return Ok(" Há um backup de memória virtual; execute o aplicativo como administrador para restaurá-lo.".into());
+    }
+    Ok(
+        match pagefile_transaction::restore(&mut WindowsPagefile::default(), store) {
+            Ok(RestoreResult::Restored) => {
+                " Memória virtual restaurada; reinicie o computador para aplicar.".into()
+            }
+            Ok(RestoreResult::AlreadyOriginal) => {
+                " A memória virtual já estava na configuração original.".into()
+            }
+            Ok(RestoreResult::Conflict) => " A memória virtual foi alterada por outro programa; ela e o backup foram preservados.".into(),
+            Err(error) => format!(" Memória virtual: {error}"),
+        },
+    )
 }
 
 #[cfg(windows)]
@@ -1758,7 +1853,7 @@ fn preview_system(_: Preset) -> Result<Preview, String> {
     Err("Este aplicativo requer Windows.".into())
 }
 #[cfg(not(windows))]
-fn apply_system(_: Preview) -> Result<(), String> {
+fn apply_system(_: Preview) -> Result<String, String> {
     Err("Este aplicativo requer Windows.".into())
 }
 #[cfg(not(windows))]

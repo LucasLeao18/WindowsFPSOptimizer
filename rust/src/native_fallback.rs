@@ -208,7 +208,7 @@ fn confirm(owner: HWND, question: &str) -> bool {
 
 enum Finished {
     Preview(Result<Preview, String>),
-    Applied(Result<(), String>),
+    Applied(Result<String, String>),
     Message(Result<String, String>),
     SessionCheck(Result<app::SessionCheck, String>),
     CleanupPlan(Result<CleanupPlan, String>),
@@ -624,7 +624,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                     Some(preset) => {
                         if let Some(plan) = preview
                             .clone()
-                            .filter(|p| p.preset == preset && !p.journal.entries.is_empty())
+                            .filter(|p| p.preset == preset && p.has_changes())
                         {
                             if confirm(
                                 window,
@@ -721,12 +721,9 @@ pub fn run(smoke: bool) -> Result<(), String> {
                             output,
                             "O perfil mudou durante a análise. Analise novamente.",
                         ),
-                        Finished::Applied(Ok(())) => {
+                        Finished::Applied(Ok(message)) => {
                             preview = None;
-                            set_text(
-                                output,
-                                "Operação concluída. O backup está disponível para restauração.",
-                            );
+                            set_text(output, &message);
                         }
                         Finished::Message(Ok(message)) => {
                             preview = None;

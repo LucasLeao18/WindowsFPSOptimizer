@@ -1,14 +1,18 @@
 ﻿# Windows FPS Optimizer
 
-[Baixar instalador EXE v1.2.0](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/download/v1.2.0/WindowsFPSOptimizer-1.2.0-Setup.exe) · [Releases e hashes](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases) · [Histórico de mudanças](CHANGELOG.md)
+**Versão 2.0.0 — reescrita em Rust.** Baixe o executável da sua arquitetura em [Releases](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/latest) (`x64` para a maioria dos PCs, `x86` para Windows 32 bits, `arm64` para notebooks ARM). É um arquivo único e portátil: não precisa de instalador, PowerShell nem Visual C++ Redistributable. Funciona no Windows 10 e no Windows 11.
 
-Aplicativo gráfico, local e offline para analisar e ajustar o próprio Windows 10 ou Windows 11 antes de jogos. Ele foi escrito em Windows PowerShell 5.1, usa WPF e não depende de módulos de terceiros.
+Documentação, perfis e instruções de build: [rust/README.md](rust/README.md) · [Histórico de mudanças](CHANGELOG.md)
 
-O objetivo é reduzir trabalho dispensável em segundo plano, manter configurações de energia coerentes durante uma sessão de jogo e tornar mudanças reversíveis sempre que o Windows permitir. O aplicativo compara FPS e tempos de quadro de capturas externas do PresentMon, sem prometer ganhos. O resultado depende do jogo, do driver, do hardware, da temperatura, da carga em segundo plano e da configuração original.
+O aplicativo analisa e ajusta o próprio Windows antes de jogos, mostra cada mudança antes de aplicá-la e guarda os valores anteriores para restauração. Nenhum ajuste promete ganho de FPS; o resultado depende do jogo, do driver, do hardware e da configuração original.
 
-> **Segurança por padrão:** `Config.json` inicia o aplicativo em modo de simulação. Abrir o programa normalmente não aplica mudanças. Alterações reais são permitidas somente na cópia instalada pelo `Setup.exe` sob `Program Files`; depois disso ainda é necessário desativar a simulação, confirmar as ações e aceitar UAC quando solicitado.
+---
 
-As releases incluem instalador, SHA-256, metadados do build e código-fonte. O workflow `Windows build and installer validation` compila em Windows Server 2022 e testa o EXE final em um runner descartável: instalação silenciosa (`/quiet`), código de saída e hashes de todos os arquivos instalados. O modo silencioso mantém a exigência de administrador e as verificações do instalador. O EXE não recebe assinatura Authenticode quando um certificado não é fornecido ao build.
+# Versão 1.x (PowerShell, legado)
+
+Os arquivos `.ps1`/`.psm1` na raiz são a versão 1.2.0, mantida para quem precisa restaurar backups criados por ela (a versão 2.0 não importa esses backups). O instalador continua em [v1.2.0](https://github.com/LucasLeao18/WindowsFPSOptimizer/releases/tag/v1.2.0). A documentação abaixo se refere a essa versão.
+
+A versão 1.x é um aplicativo gráfico escrito em Windows PowerShell 5.1 com WPF. Por padrão, `Config.json` inicia em modo de simulação; alterações reais só são permitidas na cópia instalada pelo `Setup.exe` sob `Program Files`, após desativar a simulação e aceitar o UAC. O build é feito localmente por `Build-WindowsFPSOptimizer.ps1`.
 
 ## Primeira abertura e interface simplificada (1.2.0)
 

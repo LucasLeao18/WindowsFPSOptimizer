@@ -11,7 +11,15 @@ pub struct Preview {
     pub preset: Preset,
     pub platform: WindowsVersion,
     pub journal: Journal,
+    /// Balanced only: return a manual pagefile layout to Windows management.
+    pub pagefile_to_automatic: bool,
     pub notes: Vec<String>,
+}
+
+impl Preview {
+    pub fn has_changes(&self) -> bool {
+        !self.journal.entries.is_empty() || self.pagefile_to_automatic
+    }
 }
 
 fn profile_changes(capabilities: &Capabilities, preset: Preset) -> Vec<(Setting, Value)> {
@@ -71,7 +79,7 @@ pub fn preview<B: Backend, S: Store>(
     if preset == Preset::Balanced {
         notes.push(match pagefile {
             Some(Management::Automatic) => "Memória virtual: gerenciada pelo Windows; nenhuma alteração de paginação será feita.",
-            Some(Management::Manual) => "Memória virtual: configuração manual detectada. Ela não será alterada; revise-a nas opções avançadas do Windows se desejar.",
+            Some(Management::Manual) => "Memória virtual: configuração manual detectada. Ela será devolvida ao gerenciamento automático do Windows; a configuração atual é salva para restauração. Requer executar como administrador e vale após reiniciar.",
             None => "Memória virtual: não foi possível consultar a configuração. Ela não será alterada; os demais ajustes disponíveis podem ser aplicados.",
         }.into());
     }
@@ -86,6 +94,7 @@ pub fn preview<B: Backend, S: Store>(
         preset,
         platform: version,
         journal,
+        pagefile_to_automatic: preset == Preset::Balanced && pagefile == Some(Management::Manual),
         notes,
     })
 }
@@ -103,6 +112,9 @@ pub fn apply<B: Backend, S: Store>(
     let capabilities = classify(Some(current));
     if !capabilities.supported || preview.preset == Preset::MaximumFps {
         return Err("Este perfil não é compatível.".into());
+    }
+    if preview.pagefile_to_automatic && preview.preset != Preset::Balanced {
+        return Err("O plano contém uma alteração incompatível.".into());
     }
     let allowed = profile_changes(&capabilities, preview.preset);
     for entry in &preview.journal.entries {
@@ -210,7 +222,7 @@ mod tests {
         assert!(backend.0.is_empty());
     }
     #[test]
-    fn balanced_remains_available_without_changing_pagefile() {
+    fn balanced_plans_automatic_pagefile_only_when_manual() {
         let mut backend = Fake::default();
         let mut store = Memory::default();
         let version = WindowsVersion {
@@ -226,15 +238,35 @@ mod tests {
             Some(Management::Manual),
         )
         .unwrap();
+        assert!(view.pagefile_to_automatic && view.has_changes());
         assert!(
             view.notes
                 .iter()
-                .any(|note| note.contains("manual") && note.contains("não será alterada"))
+                .any(|note| note.contains("manual") && note.contains("gerenciamento automático"))
         );
         assert!(backend.0.is_empty() && store.0.is_none());
         apply(&mut backend, &mut store, version, &view, None).unwrap();
         restore(&mut backend, &mut store).unwrap();
+        let automatic = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::Balanced,
+            Some(Management::Automatic),
+        )
+        .unwrap();
+        assert!(!automatic.pagefile_to_automatic);
+        let safe = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::Safe,
+            Some(Management::Manual),
+        )
+        .unwrap();
+        assert!(!safe.pagefile_to_automatic);
         let unknown = preview(&mut backend, &mut store, version, Preset::Balanced, None).unwrap();
+        assert!(!unknown.pagefile_to_automatic);
         assert!(
             unknown
                 .notes

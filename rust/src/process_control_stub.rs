@@ -16,3 +16,6 @@ pub fn inspect(_: ProcessIdentity) -> Result<Candidate, String> {
 pub fn terminate(_: &Candidate) -> Result<Termination, String> {
     Err("Esta opção requer Windows.".into())
 }
+pub fn current_process_elevated() -> bool {
+    false
+}

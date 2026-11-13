@@ -1,5 +1,17 @@
 # Histórico de mudanças
 
+## 2.0.0 — 13/11/2026
+
+- Aplicativo reescrito em Rust: executável único e portátil para Windows 10/11 em x64, x86 e ARM64, sem instalador, PowerShell ou Visual C++ Redistributable.
+- Interface gráfica com OpenGL, segundo renderizador (wgpu) e interface nativa do Windows como último recurso.
+- Perfis Seguro, Equilibrado e Máximo FPS com análise prévia, backup transacional e restauração com detecção de conflitos.
+- Equilibrado devolve a memória virtual manual ao gerenciamento automático do Windows, com backup exato da configuração anterior e restauração.
+- Máximo FPS em sessão temporária (prioridade, efeitos visuais, plano de energia, bloqueio de suspensão e serviços opcionais), restaurada por um monitor independente quando o jogo termina.
+- Botão **Reabrir como administrador** para memória virtual e serviços.
+- Manifesto com DPI por monitor, controles comuns v6 e caminhos longos.
+- Build, testes e release feitos localmente por `rust/build-release.ps1`; os workflows do GitHub Actions foram removidos.
+- Backups da versão 1.x não são importados; use a versão 1.2.0 para restaurá-los.
+
 ## 1.2.0 — 12/11/2026
 
 - Novo visual com cores, contraste, cartões de presets e hierarquia mais claros.

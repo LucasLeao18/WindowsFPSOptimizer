@@ -113,6 +113,11 @@ fn same_user(process: HANDLE) -> Result<bool, String> {
     Ok(unsafe { EqualSid(target.User.Sid, current.User.Sid) } != 0)
 }
 
+/// Whether this application runs with an elevated (administrator) token.
+pub fn current_process_elevated() -> bool {
+    is_elevated(unsafe { GetCurrentProcess() }).unwrap_or(false)
+}
+
 fn is_elevated(process: HANDLE) -> Result<bool, String> {
     let mut token = ptr::null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
