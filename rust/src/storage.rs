@@ -55,6 +55,37 @@ impl FileStore {
     pub fn archive_startup(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.startup_file, "startup", MAX_STARTUP_BYTES)
     }
+    /// Reopen a validated archived startup journal without changing Windows.
+    pub fn activate_startup(&mut self, selected: &std::path::Path) -> Result<(), String> {
+        if self.load_startup()?.is_some() {
+            return Err("Já existe um backup de inicialização ativo.".into());
+        }
+        let history = self
+            .startup_file
+            .parent()
+            .ok_or("Pasta de backup inválida.")?
+            .join("History");
+        let history =
+            fs::canonicalize(history).map_err(|e| format!("Histórico indisponível: {e}"))?;
+        let selected =
+            fs::canonicalize(selected).map_err(|e| format!("Backup indisponível: {e}"))?;
+        if selected.parent() != Some(history.as_path()) {
+            return Err("Selecione um arquivo diretamente do histórico deste aplicativo.".into());
+        }
+        let file =
+            File::open(selected).map_err(|e| format!("Não foi possível abrir o backup: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_STARTUP_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_STARTUP_BYTES {
+            return Err("O backup de inicialização é grande demais.".into());
+        }
+        let journal: StartupJournal = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Backup de inicialização inválido: {e}"))?;
+        crate::startup::validate(&journal)?;
+        self.save_startup(&journal)
+    }
     /// Archive raw records even if damaged, so recovery is not blocked by parsing.
     pub fn archive_session_records(&mut self) -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();

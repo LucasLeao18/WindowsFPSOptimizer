@@ -592,6 +592,11 @@ impl eframe::App for App {
                         self.status = "Lendo inicialização...".into(); self.run(&ctx, || JobResult::StartupList(startup_list()));
                     }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups de inicialização")).clicked() { self.confirm_archive_startup = true; }
+                    if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Reativar backup de inicialização")).clicked() {
+                        let mut dialog = rfd::FileDialog::new().add_filter("Backup JSON", &["json"]);
+                        if let Some(path) = history_path() { dialog = dialog.set_directory(path); }
+                        if let Some(path) = dialog.pick_file() { self.status = "Reativando backup de inicialização...".into(); self.run(&ctx, move || JobResult::StartupChanged(startup_activate(path))); }
+                    }
                     if let Some(snapshot) = &self.startup_snapshot {
                         ui.label(format!("{} entrada(s) ativas • {} com backup", snapshot.available.len(), snapshot.backed_up.len()));
                         if snapshot.skipped > 0 || snapshot.truncated { ui.label("A lista é parcial: alguns itens não puderam ser lidos ou o limite foi atingido."); }
@@ -724,7 +729,7 @@ impl eframe::App for App {
         }
         if self.confirm_archive_startup {
             egui::Window::new("Arquivar backups de inicialização").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("Todos os backups de inicialização serão movidos para o histórico. Os itens atuais do Windows não serão alterados e esses backups não serão restaurados automaticamente.");
+                ui.label("Todos os backups de inicialização serão movidos para o histórico. Os itens atuais do Windows não serão alterados. Para restaurar depois, reative o backup arquivado.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_archive_startup = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Arquivar backups")).clicked() {
@@ -993,6 +998,12 @@ fn startup_archive() -> Result<String, String> {
         path.display()
     ))
 }
+#[cfg(windows)]
+fn startup_activate(path: PathBuf) -> Result<String, String> {
+    let mut store = FileStore::acquire(engine::state_directory()?)?;
+    store.activate_startup(&path)?;
+    Ok("Backup de inicialização reativado. Atualize a lista para restaurar os itens.".into())
+}
 #[cfg(not(windows))]
 fn startup_list() -> Result<StartupSnapshot, String> {
     Err("Esta opção requer Windows.".into())
@@ -1007,6 +1018,10 @@ fn startup_restore(_: String) -> Result<String, String> {
 }
 #[cfg(not(windows))]
 fn startup_archive() -> Result<String, String> {
+    Err("Esta opção requer Windows.".into())
+}
+#[cfg(not(windows))]
+fn startup_activate(_: PathBuf) -> Result<String, String> {
     Err("Esta opção requer Windows.".into())
 }
 

@@ -360,6 +360,12 @@ mod tests {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
             startup::disable(&mut backend, &mut store, &item).unwrap();
             assert_eq!(backend.read(&item.name).unwrap(), None);
+            let archive = store.archive_startup().unwrap();
+            let outside = directory.join("outside.json");
+            std::fs::copy(&archive, &outside).unwrap();
+            assert!(store.activate_startup(&outside).is_err());
+            store.activate_startup(&archive).unwrap();
+            assert!(store.activate_startup(&archive).is_err());
         }
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
