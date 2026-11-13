@@ -359,7 +359,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                 ANALYZE => match selected(combo) {
                     Some(Preset::MaximumFps) => set_text(
                         output,
-                        "Máximo FPS inicia o jogo selecionado e tenta ajustar somente a prioridade desse processo. Selecione o executável e confirme em Aplicar / iniciar.",
+                        "Máximo FPS inicia o jogo selecionado, tenta ajustar a prioridade e impedir a suspensão automática enquanto o aplicativo e o jogo estiverem abertos. Selecione o executável e confirme em Aplicar / iniciar.",
                     ),
                     Some(preset) => {
                         preview = None;
@@ -375,7 +375,7 @@ pub fn run(smoke: bool) -> Result<(), String> {
                         if let Some(path) = game.clone() {
                             if confirm(
                                 window,
-                                "Iniciar o jogo selecionado e tentar ajustar sua prioridade? O valor anterior será salvo.",
+                                "Iniciar o jogo e tentar ajustar sua prioridade e impedir a suspensão automática? O valor anterior da prioridade será salvo; a tela ainda poderá apagar.",
                             ) {
                                 set_text(output, "Iniciando o jogo...");
                                 pending = Some(start(move || {

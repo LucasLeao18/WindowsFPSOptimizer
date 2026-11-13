@@ -388,7 +388,7 @@ impl eframe::App for App {
                 ui.label(match self.preset {
                     Preset::Safe => "Revisa Modo de Jogo, transparência e animações disponíveis. Capturas são revisadas manualmente; você verá cada mudança antes de confirmar.",
                     Preset::Balanced => "Inclui os ajustes do perfil Seguro quando a memória virtual já é gerenciada pelo Windows. Se estiver manual, revise-a nas opções avançadas do sistema.",
-                    Preset::MaximumFps => "Inicia o executável selecionado e tenta elevar sua prioridade para Acima do normal. A prioridade pode ser restaurada sem fechar o jogo; o resultado varia conforme o jogo e o computador.",
+                    Preset::MaximumFps => "Inicia o executável selecionado, tenta elevar sua prioridade e impedir a suspensão do computador durante a sessão. A prioridade pode ser restaurada sem fechar o jogo; o resultado varia conforme o jogo e o computador.",
                 });
                 if self.preset == Preset::Balanced {
                     ui.label("Se necessário: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual > Alterar, e escolha o gerenciamento automático. A mudança pode exigir administrador e reinicialização.");
@@ -581,7 +581,7 @@ impl eframe::App for App {
         }
         if self.confirm_session {
             egui::Window::new("Iniciar sessão do jogo").collapsible(false).resizable(false).show(&ctx, |ui| {
-                ui.label("O executável selecionado será iniciado. O aplicativo tentará ajustar apenas a prioridade desse processo e salvará o valor anterior.");
+                ui.label("O executável selecionado será iniciado. O aplicativo tentará ajustar a prioridade desse processo, salvará o valor anterior e tentará impedir a suspensão automática enquanto o jogo e o aplicativo estiverem abertos. A tela ainda poderá apagar.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm_session = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Iniciar jogo")).clicked() {
@@ -820,7 +820,15 @@ pub(crate) fn start_session(path: PathBuf) -> Result<String, String> {
     let process = windows_process::launch(&path)?;
     session::begin(&mut WindowsProcess, &mut store, process)
         .map_err(|e| format!("O jogo foi iniciado, mas a sessão não pôde ser aplicada: {e}"))?;
-    Ok("Jogo iniciado. A prioridade original foi salva; use Restaurar prioridade da sessão para encerrá-la sem fechar o jogo.".into())
+    let sleep = match crate::sleep_guard::start(process) {
+        Ok(()) => "Suspensão automática impedida enquanto o jogo e o aplicativo estiverem abertos.",
+        Err(_) => {
+            "Não foi possível impedir a suspensão automática; confira as opções de energia do Windows."
+        }
+    };
+    Ok(format!(
+        "Jogo iniciado. A prioridade original foi salva; use Restaurar prioridade da sessão para encerrá-la sem fechar o jogo. {sleep}"
+    ))
 }
 
 #[cfg(windows)]
@@ -829,6 +837,7 @@ pub(crate) fn stop_session() -> Result<String, String> {
         session::{self, EndResult},
         windows_process::WindowsProcess,
     };
+    crate::sleep_guard::stop();
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let result = session::end(&mut WindowsProcess, &mut store)?;
     Ok(match result {
@@ -859,6 +868,7 @@ fn check_session() -> Result<SessionCheck, String> {
 
 #[cfg(windows)]
 pub(crate) fn archive_session() -> Result<String, String> {
+    crate::sleep_guard::stop();
     let mut store = FileStore::acquire(engine::state_directory()?)?;
     let path = store.archive_session()?;
     Ok(format!(

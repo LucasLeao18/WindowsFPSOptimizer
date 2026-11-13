@@ -2,6 +2,8 @@
 mod app;
 #[cfg(windows)]
 mod native_fallback;
+#[cfg(windows)]
+mod sleep_guard;
 use eframe::egui;
 fn main() {
     use std::sync::{
