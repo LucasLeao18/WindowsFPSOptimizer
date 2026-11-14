@@ -9,8 +9,25 @@ Todos os perfis valem para o Windows inteiro, mostram cada mudança antes de apl
 | Perfil | O que faz | O que os testes publicados mostram |
 |---|---|---|
 | **Seguro** | Ativa o Modo de Jogo e desliga transparência e animações. | Diferença de FPS pequena ou nula em jogos com GPU dedicada. Deixa a área de trabalho mais responsiva e pode ajudar gráficos integrados fracos. |
-| **Equilibrado** | Seguro + sem sombras, sem gravação em segundo plano do Game Bar e memória virtual manual devolvida ao gerenciamento do Windows (exige administrador e reinício). | A gravação em segundo plano custa pouco no FPS médio (~1 FPS), mas é a causa mais citada de quedas nos 1% low. A paginação automática não aumenta FPS; evita travamentos quando a paginação manual é pequena demais. |
-| **Máximo FPS** | Equilibrado + energia no máximo: plano Alto Desempenho em desktops ou modo **Melhor desempenho** em notebooks que só têm o plano Equilibrado. | O ajuste com mais evidência de ganho, principalmente em CPUs que demoram a acelerar. Aumenta consumo e temperatura. Planos personalizados ou do fabricante nunca são substituídos. |
+| **Equilibrado** | Seguro + sem sombras, sem gravação em segundo plano do Game Bar, registro de último acesso do NTFS desligado (administrador), memória dos programas liberada uma vez e memória virtual manual devolvida ao gerenciamento do Windows (administrador e reinício). | A gravação em segundo plano custa pouco no FPS médio (~1 FPS), mas é a causa mais citada de quedas nos 1% low. A paginação automática não aumenta FPS; evita travamentos quando a paginação manual é pequena demais. |
+| **Máximo FPS** | Equilibrado + os recursos de otimização do Windows do ExitLag e do NoPing (lista abaixo) + energia no máximo: plano Alto Desempenho em desktops ou modo **Melhor desempenho** em notebooks que só têm o plano Equilibrado. | A energia é o ajuste com mais evidência de ganho, principalmente em CPUs que demoram a acelerar. Para os demais itens, os fabricantes não publicam testes independentes. Aumenta consumo e temperatura e desliga recursos do Windows até você restaurar. |
+
+### Recursos do ExitLag e do NoPing no Máximo
+
+| Recurso | Origem | Restauração |
+|---|---|---|
+| Energia no máximo | ExitLag, NoPing | Sim |
+| Núcleos da CPU sem estacionamento (não aplicado em Ryzen X3D, que depende dele) | ExitLag | Sim |
+| PCI Express e USB sem economia de energia, na tomada | NoPing ("recursos de economia de energia") | Sim |
+| Game Bar e Game DVR desligados | ExitLag | Sim |
+| Registro de último acesso do NTFS desligado | ExitLag | Sim |
+| Contadores de desempenho desligados | ExitLag | Sim |
+| SysMain (Superfetch) e Windows Search desativados | ExitLag | Sim |
+| Economia de energia do adaptador Ethernet (EEE) e desligamento do adaptador para economizar energia | ExitLag, NoPing | Sim |
+| Fechar auxiliares em segundo plano (OneDrive, Widgets, Vincular ao Celular, Game Bar, Cortana, Skype e atualizadores da Adobe e do Java) | NoPing | **Não**: eles voltam ao abrir ou no próximo login |
+| Liberar memória dos programas abertos | NoPing | Não é necessário: o Windows recarrega o que for usado |
+
+Os itens de máquina (NTFS, contadores, serviços e Ethernet) exigem **Reabrir como administrador**; sem isso, a análise mostra que ficaram de fora. Vários valem só depois de reiniciar. Navegadores, Discord, launchers e programas com trabalho aberto nunca são fechados. Desativar o Windows Defender, que o ExitLag oferece, não é feito: deixaria o computador sem proteção. A versão 1.x não alterava rede; a partir da 2.1, o Máximo altera apenas a economia de energia dos adaptadores Ethernet físicos.
 
 O Máximo informa se a **Integridade de memória** está ativada. É o recurso com maior custo medido em jogos (cerca de 3% a 8% em alguns títulos), mas é proteção de segurança, então o aplicativo não a desativa; o botão **Abrir Isolamento de núcleo** leva à configuração.
 

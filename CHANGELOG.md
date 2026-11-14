@@ -8,6 +8,9 @@
 - Equilibrado e Máximo desligam a gravação em segundo plano do Game Bar; a gravação manual continua disponível.
 - O Máximo informa quando a Integridade de memória está ativada e abre o Isolamento de núcleo, sem desativá-la.
 - A sessão de jogo temporária continua disponível como ferramenta opcional na interface avançada.
+- Máximo inclui os recursos de otimização do Windows do ExitLag e do NoPing: núcleos sem estacionamento (exceto Ryzen X3D), PCI Express e USB sem economia, Game Bar e Game DVR desligados, último acesso do NTFS e contadores de desempenho desligados, SysMain e Windows Search desativados, economia de energia do Ethernet desligada, auxiliares em segundo plano fechados e memória liberada. Todos com backup, exceto o fechamento de programas.
+- Equilibrado também desliga o último acesso do NTFS e libera a memória dos programas.
+- O desligamento do Windows Defender oferecido pelo ExitLag não foi incluído por segurança.
 
 ## 2.0.0 — 13/11/2026
 

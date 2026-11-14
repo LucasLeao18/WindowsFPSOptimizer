@@ -496,8 +496,8 @@ impl eframe::App for App {
                 ui.add_space(12.0);
                 ui.label(match self.preset {
                     Preset::Safe => "Ativa o Modo de Jogo e desliga transparência e animações. Deixa o Windows mais leve e responsivo; em jogos, testes publicados mostram diferença pequena ou nula de FPS, exceto em gráficos integrados fracos.",
-                    Preset::Balanced => "Inclui o Seguro, desliga sombras e a gravação em segundo plano do Game Bar (citada como causa de quedas nos 1% low) e devolve a memória virtual manual ao gerenciamento do Windows, o que evita travamentos por falta de memória virtual.",
-                    Preset::MaximumFps => "Inclui o Equilibrado e coloca a energia do Windows no máximo: plano Alto Desempenho em desktops ou modo Melhor desempenho em notebooks. É o ajuste com mais evidência de ganho, sobretudo em CPUs que demoram a acelerar, mas aumenta consumo e temperatura. Vale para todo o Windows, até você restaurar.",
+                    Preset::Balanced => "Inclui o Seguro, desliga sombras e a gravação em segundo plano do Game Bar (citada como causa de quedas nos 1% low), desliga o registro de último acesso do NTFS, libera a memória dos programas abertos e devolve a memória virtual manual ao gerenciamento do Windows.",
+                    Preset::MaximumFps => "Inclui o Equilibrado e os recursos de otimização do ExitLag e do NoPing: energia no máximo (Alto Desempenho ou Melhor desempenho), núcleos sem estacionamento, PCIe e USB sem economia, Game Bar desligado, SysMain e Windows Search desativados, contadores de desempenho e economia de energia do Ethernet desligados e programas auxiliares em segundo plano fechados. Aumenta consumo e temperatura e desliga recursos do Windows até você restaurar. Vários itens exigem administrador.",
                 });
                 if self.preset != Preset::Safe {
                     ui.label("A mudança de memória virtual exige executar o aplicativo como administrador e vale após reiniciar. Para conferir: Sistema > Sobre > Configurações avançadas do sistema > Desempenho > Avançado > Memória virtual.");
@@ -522,6 +522,10 @@ impl eframe::App for App {
                     if !preview.has_changes() { ui.label("As opções automáticas já estão no estado solicitado."); }
                     if preview.pagefile_to_automatic { ui.label("• Memória virtual: manual para gerenciada pelo Windows (requer administrador e reinício)"); }
                     if let Some(power) = &preview.power { ui.label(match power.kind { PowerKind::Plan => "• Plano de energia: Equilibrado para Alto Desempenho", PowerKind::Mode => "• Modo de energia: atual para Melhor desempenho" }); }
+                    for setting in &preview.power_settings { ui.label(format!("• {}: desligado no plano ativo (na tomada)", setting.description())); }
+                    for service in &preview.services { ui.label(format!("• Serviço {}: desativado", service.title())); }
+                    if !preview.close_apps.is_empty() { ui.label(format!("• Fechar programas em segundo plano: {} (não é desfeito pela restauração)", preview.close_apps.join(", "))); }
+                    if preview.trim_memory { ui.label("• Liberar memória dos programas abertos (uma vez)"); }
                     for entry in &preview.journal.entries {
                         ui.label(format!("• {}: {} para {}", setting_name(entry.setting), display_value(entry.original.as_ref()), display_value(Some(&entry.applied))));
                     }
@@ -802,6 +806,7 @@ impl eframe::App for App {
         if self.confirm {
             egui::Window::new("Confirmar alterações").collapsible(false).resizable(false).show(&ctx, |ui| {
                 ui.label("Aplicar somente as alterações listadas? Os valores anteriores serão salvos para restauração.");
+                if self.preview.as_ref().is_some_and(|p| !p.close_apps.is_empty()) { ui.label("Os programas em segundo plano listados serão fechados; isso não é desfeito pela restauração."); }
                 ui.horizontal(|ui| {
                     if ui.button("Cancelar").clicked() { self.confirm = false; }
                     if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Aplicar")).clicked() {
@@ -1111,24 +1116,18 @@ fn ensure_no_visual_session(store: &mut FileStore) -> Result<(), String> {
 #[cfg(windows)]
 pub(crate) fn preview_system(preset: Preset) -> Result<Preview, String> {
     use windows_fps_optimizer::{
-        power_profile::{self, Store as _},
-        windows_power::WindowsPowerProfile,
-        windows_registry::memory_integrity_enabled,
+        power_profile::Store as _, power_settings::Store as _, service_config::Store as _,
     };
     let version = compatibility::detect()?;
-    let mut facts = engine::Facts::default();
-    if preset != Preset::Safe {
-        facts.pagefile =
-            windows_fps_optimizer::pagefile::detect_with_timeout(Duration::from_secs(8)).ok();
-    }
-    if preset == Preset::MaximumFps {
-        facts.power = power_profile::plan(&mut WindowsPowerProfile).ok();
-        facts.memory_integrity = memory_integrity_enabled();
-    }
+    let facts = windows_fps_optimizer::system_facts::gather(preset);
     let mut preview = with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        if preset == Preset::MaximumFps && store.load_power_profile()?.is_some() {
-            return Err("Há um backup de energia anterior. Use Restaurar último backup antes de aplicar outro perfil.".into());
+        if preset == Preset::MaximumFps
+            && (store.load_power_profile()?.is_some()
+                || store.load_power_settings()?.is_some()
+                || store.load_service_config()?.is_some())
+        {
+            return Err("Há um backup anterior do perfil Máximo. Use Restaurar último backup antes de aplicar outro perfil.".into());
         }
         engine::preview(backend, store, version, preset, facts)
     })?;
@@ -1147,7 +1146,13 @@ pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
     let version = compatibility::detect()?;
     with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        engine::apply(backend, store, version, &preview, None)?;
+        engine::apply(
+            backend,
+            store,
+            version,
+            &preview,
+            process_control::current_process_elevated(),
+        )?;
         let mut message =
             String::from("Operação concluída. O backup fica disponível para restauração.");
         if preview.pagefile_to_automatic {
@@ -1180,6 +1185,61 @@ pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
                 }
             }
         }
+        if !preview.power_settings.is_empty() {
+            use windows_fps_optimizer::{
+                power_session::Backend as _,
+                power_settings,
+                windows_power::{WindowsPower, WindowsPowerSettings},
+            };
+            // The plan that is active now, after any power change above.
+            match WindowsPower.active().and_then(|plan| {
+                power_settings::begin(
+                    &mut WindowsPowerSettings,
+                    store,
+                    plan,
+                    &preview.power_settings,
+                )
+            }) {
+                Ok(0) => {}
+                Ok(count) => message.push_str(&format!(
+                    " Economia de energia desligada em {count} ajuste(s) do plano."
+                )),
+                Err(error) => {
+                    let _ = power_settings::restore(&mut WindowsPowerSettings, store);
+                    message.push_str(&format!(
+                        " Economia de energia do plano não alterada: {error}"
+                    ));
+                }
+            }
+        }
+        if !preview.services.is_empty() {
+            use windows_fps_optimizer::{service_config, windows_services::WindowsServiceConfig};
+            match service_config::begin(&mut WindowsServiceConfig, store, &preview.services) {
+                Ok(0) => {}
+                Ok(count) => message.push_str(&format!(" {count} serviço(s) desativado(s).")),
+                Err(error) => {
+                    let _ = service_config::restore(&mut WindowsServiceConfig, store);
+                    message.push_str(&format!(" Serviços não alterados: {error}"));
+                }
+            }
+        }
+        if !preview.close_apps.is_empty() {
+            let (closed, kept) = windows_fps_optimizer::background_apps::close();
+            message.push_str(&format!(
+                " {closed} programa(s) em segundo plano fechado(s)"
+            ));
+            if kept > 0 {
+                message.push_str(&format!(", {kept} preservado(s) pelas proteções"));
+            }
+            message.push('.');
+        }
+        if preview.trim_memory {
+            let trimmed = windows_fps_optimizer::background_apps::trim_memory();
+            message.push_str(&format!(" Memória liberada em {trimmed} processo(s)."));
+        }
+        if preview.preset != Preset::Safe {
+            message.push_str(" Alguns ajustes valem após reiniciar o computador.");
+        }
         Ok(message)
     })
 }
@@ -1187,7 +1247,10 @@ pub(crate) fn apply_system(preview: Preview) -> Result<String, String> {
 pub(crate) fn restore_system() -> Result<String, String> {
     with_system(|backend, store| {
         ensure_no_visual_session(store)?;
-        let pagefile = restore_pagefile(store)? + &restore_power_profile(store)?;
+        let pagefile = restore_service_config(store)?
+            + &restore_power_settings(store)?
+            + &restore_power_profile(store)?
+            + &restore_pagefile(store)?;
         let report = match engine::restore(backend, store) {
             Err(_) if !pagefile.is_empty() => return Ok(pagefile.trim_start().to_string()),
             other => other?,
@@ -1220,6 +1283,58 @@ pub(crate) fn restore_system() -> Result<String, String> {
             report.restored.len()
         ))
     })
+}
+
+/// Restores the services disabled by the Maximum profile, if any.
+#[cfg(windows)]
+fn restore_service_config(store: &mut FileStore) -> Result<String, String> {
+    use windows_fps_optimizer::{
+        service_config::{self, Store as _},
+        windows_services::WindowsServiceConfig,
+    };
+    if store.load_service_config()?.is_none() {
+        return Ok(String::new());
+    }
+    if !process_control::current_process_elevated() {
+        return Ok(" Há serviços do perfil Máximo para restaurar; execute o aplicativo como administrador.".into());
+    }
+    Ok(
+        match service_config::restore(&mut WindowsServiceConfig, store) {
+            Ok(report) if report.conflicts.is_empty() => {
+                format!(" {} serviço(s) restaurado(s).", report.restored.len())
+            }
+            Ok(report) => format!(
+                " {} serviço(s) restaurado(s); {} alterado(s) por outro programa foram preservados.",
+                report.restored.len(),
+                report.conflicts.len()
+            ),
+            Err(error) => format!(" Serviços: {error}"),
+        },
+    )
+}
+
+/// Restores the power-saving values changed on a power plan, if any.
+#[cfg(windows)]
+fn restore_power_settings(store: &mut FileStore) -> Result<String, String> {
+    use windows_fps_optimizer::{
+        power_settings::{self, Store as _},
+        windows_power::WindowsPowerSettings,
+    };
+    if store.load_power_settings()?.is_none() {
+        return Ok(String::new());
+    }
+    Ok(
+        match power_settings::restore(&mut WindowsPowerSettings, store) {
+            Ok(report) if report.conflicts.is_empty() => {
+                " Economia de energia do plano restaurada.".into()
+            }
+            Ok(report) => format!(
+                " Economia de energia restaurada; {} ajuste(s) alterado(s) por outro programa foram preservados.",
+                report.conflicts.len()
+            ),
+            Err(error) => format!(" Economia de energia: {error}"),
+        },
+    )
 }
 
 /// Restores the persistent power change of the Maximum profile, if any.
@@ -1859,12 +1974,9 @@ pub(crate) fn activate_session_visual(path: PathBuf) -> Result<String, String> {
 #[cfg(windows)]
 pub(crate) fn archive_backup() -> Result<String, String> {
     let mut store = FileStore::acquire(engine::state_directory()?)?;
-    use windows_fps_optimizer::power_profile::Store as _;
     let path = store.archive_backup()?;
-    // The power change belongs to the same profile application.
-    if store.load_power_profile().ok().flatten().is_some() {
-        store.archive_power_profile()?;
-    }
+    // Power and service records belong to the same profile application.
+    store.archive_profile_records()?;
     Ok(format!(
         "Backup arquivado em {}. As configurações atuais foram preservadas.",
         path.display()

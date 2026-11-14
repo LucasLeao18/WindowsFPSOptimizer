@@ -1,5 +1,6 @@
 //! Core logic independent of the graphical interface and Windows APIs.
 
+pub mod background_apps;
 pub mod benchmark;
 pub mod compatibility;
 pub mod diagnostics;
@@ -12,8 +13,11 @@ pub mod process_control;
 #[path = "process_control_stub.rs"]
 pub mod process_control;
 pub mod process_inventory;
+pub mod service_config;
 pub mod session;
 pub mod storage;
+#[cfg(windows)]
+pub mod system_facts;
 pub mod temp_scan;
 pub mod transaction;
 #[cfg(windows)]
@@ -116,6 +120,7 @@ mod tests {
 }
 pub mod power_profile;
 pub mod power_session;
+pub mod power_settings;
 pub mod services;
 pub mod startup;
 #[cfg(windows)]

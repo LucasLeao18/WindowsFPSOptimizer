@@ -160,9 +160,98 @@ impl crate::power_profile::Backend for WindowsPowerProfile {
     }
 }
 
+/// Plugged-in (AC) power setting values of a plan.
+pub struct WindowsPowerSettings;
+
+impl crate::power_settings::Backend for WindowsPowerSettings {
+    fn read(
+        &mut self,
+        plan: Scheme,
+        setting: crate::power_settings::Setting,
+    ) -> Result<Option<u32>, String> {
+        use windows_sys::Win32::{
+            Foundation::ERROR_FILE_NOT_FOUND, System::Power::PowerReadACValueIndex,
+        };
+        let (subgroup, id) = setting.ids();
+        let (plan, subgroup, id) = (to_guid(plan), to_guid(subgroup), to_guid(id));
+        let mut value = 0u32;
+        let status =
+            unsafe { PowerReadACValueIndex(ptr::null_mut(), &plan, &subgroup, &id, &mut value) };
+        match status {
+            ERROR_SUCCESS => Ok(Some(value)),
+            ERROR_FILE_NOT_FOUND => Ok(None),
+            other => Err(format!(
+                "Não foi possível ler {} (erro {other}).",
+                setting.description()
+            )),
+        }
+    }
+    fn write(
+        &mut self,
+        plan: Scheme,
+        setting: crate::power_settings::Setting,
+        value: u32,
+    ) -> Result<(), String> {
+        use windows_sys::Win32::System::Power::PowerWriteACValueIndex;
+        let (subgroup, id) = setting.ids();
+        let (plan, subgroup, id) = (to_guid(plan), to_guid(subgroup), to_guid(id));
+        let status =
+            unsafe { PowerWriteACValueIndex(ptr::null_mut(), &plan, &subgroup, &id, value) };
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "O Windows não permitiu alterar {} (erro {status}).",
+                setting.description()
+            ));
+        }
+        Ok(())
+    }
+    fn commit(&mut self, plan: Scheme) -> Result<(), String> {
+        // Re-activating the active plan makes the written values effective.
+        if WindowsPower.active()? == plan {
+            let status = unsafe { PowerSetActiveScheme(ptr::null_mut(), &to_guid(plan)) };
+            if status != ERROR_SUCCESS {
+                return Err(format!(
+                    "O Windows não aplicou os ajustes de energia (erro {status})."
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reads_active_plan_power_settings_without_changes() {
+        use crate::power_settings::{Backend, Setting};
+        let plan = WindowsPower.active().unwrap();
+        for setting in Setting::ALL {
+            let first = WindowsPowerSettings.read(plan, setting).unwrap();
+            assert_eq!(WindowsPowerSettings.read(plan, setting).unwrap(), first);
+        }
+    }
+    /// Writes each current value back unchanged and re-applies the plan.
+    #[test]
+    fn rewrites_active_plan_power_settings_unchanged() {
+        use crate::power_settings::{Backend, Setting};
+        let plan = WindowsPower.active().unwrap();
+        for setting in Setting::ALL {
+            if let Some(value) = WindowsPowerSettings.read(plan, setting).unwrap() {
+                // A driver-locked range (core parking on AMD X3D) refuses even
+                // the current value; the other settings must accept it.
+                let written = WindowsPowerSettings.write(plan, setting, value);
+                if setting != Setting::CoreParkingMinimum {
+                    written.unwrap();
+                }
+                assert_eq!(
+                    WindowsPowerSettings.read(plan, setting).unwrap(),
+                    Some(value)
+                );
+            }
+        }
+        WindowsPowerSettings.commit(plan).unwrap();
+    }
     #[test]
     fn reads_power_mode_without_changes() {
         use crate::power_profile::Backend;

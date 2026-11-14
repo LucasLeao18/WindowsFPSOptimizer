@@ -23,9 +23,41 @@ pub enum Setting {
     DropShadows,
     UiEffects,
     BackgroundRecording,
+    /// Game Bar capture ("Xbox Game Bar" recording) for this user.
+    GameDvr,
+    AppCapture,
+    /// Machine-wide; require administrator rights.
+    NtfsLastAccess,
+    PerformanceCounters,
+    /// Physical Ethernet adapter, by its four-digit network-class subkey.
+    AdapterEnergyEfficient(u16),
+    AdapterPowerManagement(u16),
 }
 
 impl Setting {
+    /// The only value a profile may write for this setting.
+    pub fn target(self) -> Value {
+        match self {
+            Self::GameMode => Value::dword(1),
+            // User-managed, last-access updates disabled (fsutil disablelastaccess 1).
+            Self::NtfsLastAccess => Value::dword(0x8000_0001),
+            Self::PerformanceCounters => Value::dword(1),
+            Self::AdapterEnergyEfficient(_) => Value::string("0"),
+            // Clears "Allow the computer to turn off this device to save power".
+            Self::AdapterPowerManagement(_) => Value::dword(24),
+            _ => Value::dword(0),
+        }
+    }
+    /// Settings stored under HKEY_LOCAL_MACHINE.
+    pub fn requires_administrator(self) -> bool {
+        matches!(
+            self,
+            Self::NtfsLastAccess
+                | Self::PerformanceCounters
+                | Self::AdapterEnergyEfficient(_)
+                | Self::AdapterPowerManagement(_)
+        )
+    }
     pub fn is_system_parameter(self) -> bool {
         matches!(
             self,
@@ -61,6 +93,14 @@ impl Setting {
             Self::DropShadows => "Sombras de janelas compatíveis",
             Self::UiEffects => "Efeitos da interface",
             Self::BackgroundRecording => "Gravação em segundo plano do Game Bar",
+            Self::GameDvr => "Game DVR (capturas do Game Bar)",
+            Self::AppCapture => "Captura de jogos do Game Bar",
+            Self::NtfsLastAccess => "Registro de último acesso do NTFS",
+            Self::PerformanceCounters => "Contadores de desempenho do Windows",
+            Self::AdapterEnergyEfficient(_) => "Ethernet com economia de energia (EEE)",
+            Self::AdapterPowerManagement(_) => {
+                "Desligar o adaptador Ethernet para economizar energia"
+            }
         }
     }
 }
@@ -72,6 +112,17 @@ pub struct Value {
 }
 
 impl Value {
+    /// REG_SZ, as used by network adapter advanced properties.
+    pub fn string(value: &str) -> Self {
+        Self {
+            kind: 1,
+            bytes: value
+                .encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        }
+    }
     pub fn dword(value: u32) -> Self {
         Self {
             kind: 4,
@@ -290,17 +341,13 @@ pub fn restore<B: Backend, S: Store>(
 }
 
 pub(crate) fn validate(journal: &Journal) -> Result<(), String> {
-    if journal.schema != 1 || journal.entries.len() > 15 {
+    if journal.schema != 1 || journal.entries.len() > 64 {
         return Err("Backup incompatível ou inválido.".into());
     }
     let mut seen = HashSet::new();
     for entry in &journal.entries {
         if !seen.insert(entry.setting)
-            || entry.applied
-                != Value::dword(match entry.setting {
-                    Setting::GameMode => 1,
-                    _ => 0,
-                })
+            || entry.applied != entry.setting.target()
             || (entry.setting.is_system_parameter()
                 && !matches!(entry.original.as_ref(), Some(value) if value == &Value::dword(0) || value == &Value::dword(1)))
             || entry

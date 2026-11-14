@@ -24,18 +24,62 @@ impl Drop for Key {
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
-fn info(setting: Setting) -> Result<(&'static str, &'static str), String> {
+const NETWORK_CLASS: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
+
+struct Location {
+    root: HKEY,
+    path: String,
+    name: &'static str,
+}
+
+fn user(path: &str, name: &'static str) -> Result<Location, String> {
+    Ok(Location {
+        root: HKEY_CURRENT_USER,
+        path: path.into(),
+        name,
+    })
+}
+fn machine(path: String, name: &'static str) -> Result<Location, String> {
+    Ok(Location {
+        root: HKEY_LOCAL_MACHINE,
+        path,
+        name,
+    })
+}
+fn adapter_path(index: u16) -> Result<String, String> {
+    if index > 9999 {
+        return Err("Adaptador de rede inválido.".into());
+    }
+    Ok(format!(r"{NETWORK_CLASS}\{index:04}"))
+}
+fn info(setting: Setting) -> Result<Location, String> {
     match setting {
-        Setting::GameMode => Ok((r"Software\Microsoft\GameBar", "AutoGameModeEnabled")),
-        Setting::Transparency => Ok((
+        Setting::GameMode => user(r"Software\Microsoft\GameBar", "AutoGameModeEnabled"),
+        Setting::Transparency => user(
             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
             "EnableTransparency",
-        )),
+        ),
         // Per-user "record what happened" setting; the policy is never touched.
-        Setting::BackgroundRecording => Ok((
+        Setting::BackgroundRecording => user(
             r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
             "HistoricalCaptureEnabled",
-        )),
+        ),
+        Setting::AppCapture => user(
+            r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
+            "AppCaptureEnabled",
+        ),
+        Setting::GameDvr => user(r"System\GameConfigStore", "GameDVR_Enabled"),
+        Setting::NtfsLastAccess => machine(
+            r"SYSTEM\CurrentControlSet\Control\FileSystem".into(),
+            "NtfsDisableLastAccessUpdate",
+        ),
+        Setting::PerformanceCounters => machine(
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib".into(),
+            "Disable Performance Counters",
+        ),
+        Setting::AdapterEnergyEfficient(index) => machine(adapter_path(index)?, "*EEE"),
+        Setting::AdapterPowerManagement(index) => machine(adapter_path(index)?, "PnPCapabilities"),
         // A machine policy must not be changed until edition and management state
         // can be verified and the journal is protected across elevation.
         Setting::GameCapturePolicy => Err(
@@ -45,6 +89,9 @@ fn info(setting: Setting) -> Result<(&'static str, &'static str), String> {
     }
 }
 fn error(operation: &str, code: u32) -> String {
+    if code == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED {
+        return format!("{operation}: é necessário executar o aplicativo como administrador.");
+    }
     format!(
         "{operation}: {} (código {code}).",
         io::Error::from_raw_os_error(code as i32)
@@ -56,17 +103,24 @@ fn open(
     access: u32,
     create: bool,
 ) -> Result<Option<(Key, Vec<u16>)>, String> {
-    let (path, name) = info(setting)?;
+    #[allow(unused_mut)]
+    let mut location = info(setting)?;
     #[cfg(test)]
-    let path = adapter.test_root.as_deref().unwrap_or(path);
+    if let Some(root) = &adapter.test_root {
+        location.root = HKEY_CURRENT_USER;
+        location.path = root.clone();
+    }
     #[cfg(not(test))]
     let _ = adapter;
-    let path = wide(path);
+    // Machine keys belong to Windows and drivers: they are opened, never created.
+    let create = create && location.root == HKEY_CURRENT_USER;
+    let access = access | KEY_WOW64_64KEY;
+    let path = wide(&location.path);
     let mut raw: HKEY = ptr::null_mut();
     let status = unsafe {
         if create {
             RegCreateKeyExW(
-                HKEY_CURRENT_USER,
+                location.root,
                 path.as_ptr(),
                 0,
                 ptr::null(),
@@ -77,16 +131,109 @@ fn open(
                 ptr::null_mut(),
             )
         } else {
-            RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, access, &mut raw)
+            RegOpenKeyExW(location.root, path.as_ptr(), 0, access, &mut raw)
         }
     };
-    if status == ERROR_FILE_NOT_FOUND && !create {
+    if status == ERROR_FILE_NOT_FOUND {
         return Ok(None);
     }
     if status != ERROR_SUCCESS {
         return Err(error("Não foi possível abrir a configuração", status));
     }
-    Ok(Some((Key(raw), wide(name))))
+    Ok(Some((Key(raw), wide(location.name))))
+}
+
+fn query_dword_or_string(key: HKEY, name: &str) -> Option<String> {
+    let name = wide(name);
+    let mut kind = 0u32;
+    let mut buffer = [0u16; 64];
+    let mut size = (buffer.len() * 2) as u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key,
+            name.as_ptr(),
+            ptr::null(),
+            &mut kind,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    match kind {
+        REG_DWORD if size == 4 => Some((buffer[0] as u32 | ((buffer[1] as u32) << 16)).to_string()),
+        REG_SZ => {
+            let units = &buffer[..(size as usize / 2).min(buffer.len())];
+            Some(
+                String::from_utf16_lossy(units)
+                    .trim_end_matches('\0')
+                    .to_string(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Physical Ethernet adapters (IfType 6, 802.3 media) and whether each one
+/// exposes the standardized Energy-Efficient Ethernet keyword. Read-only.
+pub fn ethernet_adapters() -> Vec<(u16, bool)> {
+    let mut found = Vec::new();
+    let path = wide(NETWORK_CLASS);
+    let mut class: HKEY = ptr::null_mut();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            path.as_ptr(),
+            0,
+            KEY_READ | KEY_WOW64_64KEY,
+            &mut class,
+        )
+    } != ERROR_SUCCESS
+    {
+        return found;
+    }
+    let class = Key(class);
+    for index in 0..512u32 {
+        let mut name = [0u16; 32];
+        let mut length = name.len() as u32;
+        let status = unsafe {
+            RegEnumKeyExW(
+                class.0,
+                index,
+                name.as_mut_ptr(),
+                &mut length,
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            break;
+        }
+        let name = String::from_utf16_lossy(&name[..length as usize]);
+        let Ok(number) = name.parse::<u16>() else {
+            continue;
+        };
+        if name.len() != 4 {
+            continue;
+        }
+        let sub = wide(&name);
+        let mut key: HKEY = ptr::null_mut();
+        if unsafe { RegOpenKeyExW(class.0, sub.as_ptr(), 0, KEY_QUERY_VALUE, &mut key) }
+            != ERROR_SUCCESS
+        {
+            continue;
+        }
+        let key = Key(key);
+        let ethernet = query_dword_or_string(key.0, "*IfType").as_deref() == Some("6")
+            && query_dword_or_string(key.0, "*PhysicalMediaType").as_deref() == Some("14");
+        if ethernet {
+            found.push((number, query_dword_or_string(key.0, "*EEE").is_some()));
+        }
+    }
+    found
 }
 
 impl Backend for WindowsRegistry {
@@ -180,6 +327,26 @@ impl Backend for WindowsRegistry {
     }
 }
 
+/// Read-only: the marketing name of the first processor, if available.
+pub fn processor_name() -> Option<String> {
+    let path = wide(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+    let mut key: HKEY = ptr::null_mut();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut key,
+        )
+    } != ERROR_SUCCESS
+    {
+        return None;
+    }
+    let key = Key(key);
+    query_dword_or_string(key.0, "ProcessorNameString").map(|name| name.trim().to_string())
+}
+
 /// Read-only: whether Memory Integrity (HVCI) is enabled. `None` if unknown.
 pub fn memory_integrity_enabled() -> Option<bool> {
     let path = wide(
@@ -221,6 +388,45 @@ pub fn memory_integrity_enabled() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn machine_settings_round_trip_in_an_isolated_user_key() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = format!(
+            r"Software\WindowsFPSOptimizerRustTests\machine-{}-{unique}",
+            std::process::id()
+        );
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                unsafe {
+                    RegDeleteTreeW(HKEY_CURRENT_USER, wide(&self.0).as_ptr());
+                }
+            }
+        }
+        let _cleanup = Cleanup(path.clone());
+        let mut adapter = WindowsRegistry {
+            test_root: Some(path),
+        };
+        for setting in [
+            Setting::NtfsLastAccess,
+            Setting::AdapterEnergyEfficient(7),
+            Setting::GameDvr,
+        ] {
+            assert_eq!(adapter.read(setting).unwrap(), None);
+            adapter.write(setting, &setting.target()).unwrap();
+            assert_eq!(adapter.read(setting).unwrap(), Some(setting.target()));
+            adapter.delete(setting).unwrap();
+            assert_eq!(adapter.read(setting).unwrap(), None);
+        }
+    }
+    #[test]
+    fn lists_ethernet_adapters_and_processor_without_changes() {
+        assert_eq!(ethernet_adapters(), ethernet_adapters());
+        assert!(processor_name().is_some_and(|name| !name.is_empty()));
+    }
     #[test]
     fn reads_memory_integrity_state_without_changes() {
         assert_eq!(memory_integrity_enabled(), memory_integrity_enabled());

@@ -183,8 +183,147 @@ impl Backend for WindowsServices {
         wait(&handle, Status::Running)
     }
 }
+/// Start-type adapter for the profile services in `service_config`.
+pub struct WindowsServiceConfig;
+
+fn open_named(name: &str, access: u32) -> Result<Option<Handle>, String> {
+    let manager = unsafe { OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT) };
+    if manager.is_null() {
+        return Err(format!(
+            "Não foi possível acessar serviços do Windows: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let manager = Handle(manager);
+    let raw = unsafe {
+        OpenServiceW(
+            manager.0,
+            wide(name).as_ptr(),
+            access | SERVICE_QUERY_STATUS,
+        )
+    };
+    if raw.is_null() {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) {
+            return Ok(None);
+        }
+        return Err(format!(
+            "Não foi possível acessar {name}: {error}. É necessário executar como administrador."
+        ));
+    }
+    Ok(Some(Handle(raw)))
+}
+
+fn required(name: &str, access: u32) -> Result<Handle, String> {
+    open_named(name, access)?.ok_or_else(|| format!("O serviço {name} não está instalado."))
+}
+
+impl crate::service_config::Backend for WindowsServiceConfig {
+    fn start_type(
+        &mut self,
+        service: crate::service_config::Service,
+    ) -> Result<Option<u32>, String> {
+        let Some(handle) = open_named(service.name(), SERVICE_QUERY_CONFIG)? else {
+            return Ok(None);
+        };
+        let mut needed = 0u32;
+        unsafe { QueryServiceConfigW(handle.0, ptr::null_mut(), 0, &mut needed) };
+        if needed == 0 || needed > 64 * 1024 {
+            return Err("Não foi possível consultar a configuração do serviço.".into());
+        }
+        // u64 storage keeps the structure aligned.
+        let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+        if unsafe { QueryServiceConfigW(handle.0, buffer.as_mut_ptr().cast(), needed, &mut needed) }
+            == 0
+        {
+            return Err(format!(
+                "Não foi possível consultar a configuração do serviço: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let config = unsafe { &*(buffer.as_ptr().cast::<QUERY_SERVICE_CONFIGW>()) };
+        Ok(Some(config.dwStartType))
+    }
+    fn set_start_type(
+        &mut self,
+        service: crate::service_config::Service,
+        start_type: u32,
+    ) -> Result<(), String> {
+        let handle = required(service.name(), SERVICE_CHANGE_CONFIG)?;
+        if unsafe {
+            ChangeServiceConfigW(
+                handle.0,
+                SERVICE_NO_CHANGE,
+                start_type,
+                SERVICE_NO_CHANGE,
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            )
+        } == 0
+        {
+            return Err(format!(
+                "Não foi possível alterar {}: {}. É necessário executar como administrador.",
+                service.title(),
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+    fn running(&mut self, service: crate::service_config::Service) -> Result<bool, String> {
+        let handle = required(service.name(), 0)?;
+        Ok(status(&query(&handle)?) != Status::Stopped)
+    }
+    fn stop(&mut self, service: crate::service_config::Service) -> Result<(), String> {
+        let handle = required(service.name(), SERVICE_STOP)?;
+        let mut state = SERVICE_STATUS::default();
+        if unsafe { ControlService(handle.0, SERVICE_CONTROL_STOP, &mut state) } == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error()
+                != Some(windows_sys::Win32::Foundation::ERROR_SERVICE_NOT_ACTIVE as i32)
+            {
+                return Err(format!(
+                    "Não foi possível parar {}: {error}",
+                    service.title()
+                ));
+            }
+        }
+        wait(&handle, Status::Stopped)
+    }
+    fn start(&mut self, service: crate::service_config::Service) -> Result<(), String> {
+        let handle = required(service.name(), SERVICE_START)?;
+        if unsafe { StartServiceW(handle.0, 0, ptr::null()) } == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error()
+                != Some(windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING as i32)
+            {
+                return Err(format!(
+                    "Não foi possível iniciar {}: {error}",
+                    service.title()
+                ));
+            }
+        }
+        wait(&handle, Status::Running)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_profile_service_start_types_without_changes() {
+        use crate::service_config::{Backend, Service};
+        for service in Service::ALL {
+            let first = super::WindowsServiceConfig.start_type(service).unwrap();
+            assert_eq!(
+                super::WindowsServiceConfig.start_type(service).unwrap(),
+                first
+            );
+        }
+    }
     use super::*;
     #[test]
     fn queries_optional_services_without_changes() {

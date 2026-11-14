@@ -3,6 +3,8 @@ use crate::{
     pagefile_transaction::{Journal as PagefileJournal, Store as PagefileStore},
     power_profile::{Journal as PowerProfileJournal, Store as PowerProfileStore},
     power_session::{Journal as PowerJournal, Store as PowerStore},
+    power_settings::{Journal as PowerSettingsJournal, Store as PowerSettingsStore},
+    service_config::{Journal as ServiceConfigJournal, Store as ServiceConfigStore},
     services::{Journal as ServicesJournal, Store as ServicesStore},
     session::{SessionJournal, SessionStore},
     startup::{Journal as StartupJournal, Store as StartupStore},
@@ -26,6 +28,8 @@ pub struct FileStore {
     services_file: PathBuf,
     pagefile_file: PathBuf,
     power_profile_file: PathBuf,
+    power_settings_file: PathBuf,
+    service_config_file: PathBuf,
     _lock: File,
 }
 
@@ -51,6 +55,8 @@ impl FileStore {
             services_file: directory.join("services.json"),
             pagefile_file: directory.join("pagefile.json"),
             power_profile_file: directory.join("power-profile.json"),
+            power_settings_file: directory.join("power-settings.json"),
+            service_config_file: directory.join("service-config.json"),
             _lock: lock,
         })
     }
@@ -59,6 +65,20 @@ impl FileStore {
     /// This never changes a process or a Windows setting.
     pub fn archive_session(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.session_file, "session", 65_536)
+    }
+    /// Archives every record created by applying a profile, skipping absent ones.
+    pub fn archive_profile_records(&mut self) -> Result<Vec<PathBuf>, String> {
+        let mut paths = Vec::new();
+        for (file, prefix) in [
+            (&self.power_profile_file, "power-profile"),
+            (&self.power_settings_file, "power-settings"),
+            (&self.service_config_file, "service-config"),
+        ] {
+            if file.try_exists().map_err(|e| e.to_string())? {
+                paths.push(archive_record(file, prefix, 65_536)?);
+            }
+        }
+        Ok(paths)
     }
     pub fn archive_power_profile(&mut self) -> Result<PathBuf, String> {
         archive_record(&self.power_profile_file, "power-profile", 65_536)
@@ -453,6 +473,113 @@ impl PowerProfileStore for FileStore {
                 "Não foi possível finalizar o backup de energia: {error}"
             )),
         }
+    }
+}
+
+fn load_small<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+    label: &str,
+) -> Result<Option<T>, String> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Não foi possível abrir o backup de {label}: {error}"
+            ));
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 65_536 {
+        return Err(format!("O backup de {label} é grande demais."));
+    }
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|e| format!("Backup de {label} inválido: {e}"))
+}
+fn save_small<T: serde::Serialize>(
+    path: &std::path::Path,
+    label: &str,
+    value: &T,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!("Não foi possível criar o backup de {label}: {e}"))?;
+    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(format!(
+            "Não foi possível salvar o backup de {label}: {error}"
+        ));
+    }
+    Ok(())
+}
+fn update_small<T: serde::Serialize + serde::de::DeserializeOwned + PartialEq>(
+    path: &std::path::Path,
+    label: &str,
+    old: &T,
+    new: &T,
+) -> Result<(), String> {
+    if load_small::<T>(path, label)?.as_ref() != Some(old) {
+        return Err(format!("O backup de {label} mudou durante a operação."));
+    }
+    let bytes = serde_json::to_vec(new).map_err(|e| e.to_string())?;
+    replace_record(path, &bytes)
+}
+fn clear_small(path: &std::path::Path, label: &str) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Não foi possível finalizar o backup de {label}: {error}"
+        )),
+    }
+}
+
+const POWER_SETTINGS: &str = "ajustes de energia";
+const SERVICE_CONFIG: &str = "serviços do perfil";
+
+impl PowerSettingsStore for FileStore {
+    fn load_power_settings(&mut self) -> Result<Option<PowerSettingsJournal>, String> {
+        load_small(&self.power_settings_file, POWER_SETTINGS)
+    }
+    fn save_power_settings(&mut self, journal: &PowerSettingsJournal) -> Result<(), String> {
+        save_small(&self.power_settings_file, POWER_SETTINGS, journal)
+    }
+    fn update_power_settings(
+        &mut self,
+        old: &PowerSettingsJournal,
+        new: &PowerSettingsJournal,
+    ) -> Result<(), String> {
+        update_small(&self.power_settings_file, POWER_SETTINGS, old, new)
+    }
+    fn clear_power_settings(&mut self) -> Result<(), String> {
+        clear_small(&self.power_settings_file, POWER_SETTINGS)
+    }
+}
+
+impl ServiceConfigStore for FileStore {
+    fn load_service_config(&mut self) -> Result<Option<ServiceConfigJournal>, String> {
+        load_small(&self.service_config_file, SERVICE_CONFIG)
+    }
+    fn save_service_config(&mut self, journal: &ServiceConfigJournal) -> Result<(), String> {
+        save_small(&self.service_config_file, SERVICE_CONFIG, journal)
+    }
+    fn update_service_config(
+        &mut self,
+        old: &ServiceConfigJournal,
+        new: &ServiceConfigJournal,
+    ) -> Result<(), String> {
+        update_small(&self.service_config_file, SERVICE_CONFIG, old, new)
+    }
+    fn clear_service_config(&mut self) -> Result<(), String> {
+        clear_small(&self.service_config_file, SERVICE_CONFIG)
     }
 }
 

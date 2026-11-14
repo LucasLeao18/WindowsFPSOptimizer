@@ -4,6 +4,7 @@ use crate::{
     compatibility::{Capabilities, WindowsVersion, classify, conservative_changes},
     pagefile::Management,
     power_profile::{self, Kind},
+    power_settings, service_config,
     transaction::{self, Backend, Journal, RestoreReport, Setting, Store, Value},
 };
 
@@ -16,6 +17,16 @@ pub struct Preview {
     pub pagefile_to_automatic: bool,
     /// Maximum only: the power plan or power mode to switch.
     pub power: Option<PowerChange>,
+    /// Maximum only: power-saving overrides on the plan active after `power`.
+    pub power_settings: Vec<power_settings::Setting>,
+    /// Maximum only: services whose start type becomes Disabled.
+    pub services: Vec<service_config::Service>,
+    /// Maximum only: background helpers to close (not restorable).
+    pub close_apps: Vec<&'static str>,
+    /// Balanced and Maximum: trim working sets once (not restorable).
+    pub trim_memory: bool,
+    /// The facts the plan was built from, used to validate it again on apply.
+    pub facts: Facts,
     pub notes: Vec<String>,
 }
 
@@ -28,28 +39,89 @@ pub struct PowerChange {
 
 impl Preview {
     pub fn has_changes(&self) -> bool {
-        !self.journal.entries.is_empty() || self.pagefile_to_automatic || self.power.is_some()
+        !self.journal.entries.is_empty()
+            || self.pagefile_to_automatic
+            || self.power.is_some()
+            || !self.power_settings.is_empty()
+            || !self.services.is_empty()
+            || !self.close_apps.is_empty()
+            || self.trim_memory
     }
 }
 
 /// System facts gathered by the caller (read-only queries that may be slow).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Facts {
     pub pagefile: Option<Management>,
     pub power: Option<power_profile::Plan>,
     pub memory_integrity: Option<bool>,
+    /// The application runs as administrator.
+    pub elevated: bool,
+    /// Physical Ethernet adapters and whether each exposes Energy-Efficient Ethernet.
+    pub adapters: Vec<(u16, bool)>,
+    /// AMD X3D processors rely on core parking to pick the V-Cache CCD.
+    pub x3d: bool,
+    /// Power-saving overrides still pending on the plan that will be active.
+    pub power_settings: Vec<power_settings::Setting>,
+    /// Profile services installed and not yet disabled.
+    pub services: Vec<service_config::Service>,
+    /// Closable background helpers currently running.
+    pub background: Vec<&'static str>,
 }
 
-fn profile_changes(capabilities: &Capabilities, preset: Preset) -> Vec<(Setting, Value)> {
+/// At most this many Ethernet adapters are adjusted.
+const MAX_ADAPTERS: usize = 8;
+
+fn profile_changes(
+    capabilities: &Capabilities,
+    preset: Preset,
+    facts: &Facts,
+) -> Vec<(Setting, Value)> {
     let mut changes = conservative_changes(capabilities);
-    if capabilities.supported && preset != Preset::Safe {
-        changes.extend([
-            (Setting::CursorShadow, Value::dword(0)),
-            (Setting::DropShadows, Value::dword(0)),
-            (Setting::BackgroundRecording, Value::dword(0)),
-        ]);
+    if !capabilities.supported || preset == Preset::Safe {
+        return changes;
     }
+    let mut settings = vec![
+        Setting::CursorShadow,
+        Setting::DropShadows,
+        Setting::BackgroundRecording,
+    ];
+    if facts.elevated {
+        settings.push(Setting::NtfsLastAccess);
+    }
+    if preset == Preset::MaximumFps {
+        settings.extend([Setting::GameDvr, Setting::AppCapture]);
+        if facts.elevated {
+            settings.push(Setting::PerformanceCounters);
+            for (index, has_eee) in facts.adapters.iter().take(MAX_ADAPTERS) {
+                if *has_eee {
+                    settings.push(Setting::AdapterEnergyEfficient(*index));
+                }
+                settings.push(Setting::AdapterPowerManagement(*index));
+            }
+        }
+    }
+    changes.extend(settings.into_iter().map(|s| (s, s.target())));
     changes
+}
+
+/// Changes the profile would make that need administrator rights.
+fn administrator_items(preset: Preset, facts: &Facts) -> Vec<&'static str> {
+    let mut items = Vec::new();
+    if preset == Preset::Safe {
+        return items;
+    }
+    items.push("último acesso do NTFS");
+    if preset == Preset::MaximumFps {
+        items.push("contadores de desempenho");
+        if !facts.adapters.is_empty() {
+            items.push("economia de energia do Ethernet");
+        }
+        if !facts.services.is_empty() {
+            items.push("SysMain e Windows Search");
+        }
+    }
+    items
 }
 
 pub fn preview<B: Backend, S: Store>(
@@ -74,7 +146,7 @@ pub fn preview<B: Backend, S: Store>(
         schema: 1,
         entries: Vec::new(),
     };
-    for (setting, value) in profile_changes(&capabilities, preset) {
+    for (setting, value) in profile_changes(&capabilities, preset, &facts) {
         match transaction::prepare(backend, &[(setting, value)]).and_then(|candidate| {
             transaction::validate(&candidate)?;
             Ok(candidate)
@@ -93,6 +165,17 @@ pub fn preview<B: Backend, S: Store>(
             None => "Memória virtual: não foi possível consultar a configuração. Ela não será alterada; os demais ajustes disponíveis podem ser aplicados.",
         }.into());
     }
+    if preset != Preset::Safe {
+        if facts.elevated {
+            notes.push("Último acesso do NTFS desligado após reiniciar: backups e o Sensor de Armazenamento deixam de saber quando um arquivo foi aberto.".into());
+        } else {
+            notes.push(format!(
+                "Exigem administrador e ficam de fora agora: {}. Use Reabrir como administrador para incluí-los.",
+                administrator_items(preset, &facts).join(", ")
+            ));
+        }
+        notes.push("A memória dos programas abertos será liberada uma vez; o Windows recarrega o que for usado.".into());
+    }
     let mut power = None;
     if preset == Preset::MaximumFps {
         notes.push(match facts.power {
@@ -107,6 +190,41 @@ pub fn preview<B: Backend, S: Store>(
             Some(power_profile::Plan::Unavailable) => "Energia: um plano personalizado ou do fabricante está ativo, ou o Windows não oferece o modo de energia. Ele não será substituído.",
             None => "Energia: não foi possível consultar o plano; ele não será alterado.",
         }.into());
+        if !facts.power_settings.is_empty() {
+            notes.push(format!(
+                "Economia de energia desligada no plano ativo (na tomada): {}. Aumenta consumo e temperatura.",
+                facts
+                    .power_settings
+                    .iter()
+                    .map(|setting| setting.description())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if facts.x3d {
+            notes.push("Estacionamento de núcleos mantido: processadores Ryzen X3D dependem dele para usar o cache 3D nos jogos.".into());
+        }
+        if facts.elevated {
+            for service in &facts.services {
+                notes.push(format!(
+                    "{} será desativado: {}.",
+                    service.title(),
+                    service.impact()
+                ));
+            }
+            if !facts.adapters.is_empty() {
+                notes.push("Ethernet: economia de energia desligada no adaptador; vale depois de reiniciar o adaptador ou o computador.".into());
+            }
+            notes.push("Contadores de desempenho desligados após reiniciar: o Monitor de Desempenho, gráficos do Gerenciador de Tarefas e sobreposições como o MSI Afterburner podem ficar sem dados.".into());
+        }
+        if !facts.background.is_empty() {
+            notes.push(format!(
+                "Serão fechados: {}. Isso não é desfeito pela restauração; eles voltam ao abrir ou no próximo login.",
+                facts.background.join(", ")
+            ));
+        }
+        notes.push("Game Bar desligado: Win+G e as gravações do Game Bar deixam de funcionar até restaurar.".into());
+        notes.push("O desligamento do Windows Defender, oferecido por alguns otimizadores, não é feito: ele deixaria o computador sem proteção.".into());
         if facts.memory_integrity == Some(true) {
             notes.push("Integridade de memória está ativada. Testes publicados mostram perdas de cerca de 3% a 8% em alguns jogos, mas ela protege contra drivers maliciosos. O aplicativo não a desativa; a decisão fica em Segurança do Windows > Segurança do dispositivo > Isolamento de núcleo.".into());
         }
@@ -128,6 +246,23 @@ pub fn preview<B: Backend, S: Store>(
         journal,
         pagefile_to_automatic: preset != Preset::Safe && pagefile == Some(Management::Manual),
         power,
+        power_settings: if preset == Preset::MaximumFps {
+            facts.power_settings.clone()
+        } else {
+            Vec::new()
+        },
+        services: if preset == Preset::MaximumFps && facts.elevated {
+            facts.services.clone()
+        } else {
+            Vec::new()
+        },
+        close_apps: if preset == Preset::MaximumFps {
+            facts.background.clone()
+        } else {
+            Vec::new()
+        },
+        trim_memory: preset != Preset::Safe,
+        facts,
         notes,
     })
 }
@@ -137,7 +272,7 @@ pub fn apply<B: Backend, S: Store>(
     store: &mut S,
     current: WindowsVersion,
     preview: &Preview,
-    _pagefile: Option<Management>,
+    elevated_now: bool,
 ) -> Result<(), String> {
     if preview.platform != current {
         return Err("A versão do Windows mudou desde a análise. Faça uma nova análise.".into());
@@ -146,12 +281,21 @@ pub fn apply<B: Backend, S: Store>(
     if !capabilities.supported {
         return Err("Este perfil não é compatível.".into());
     }
+    let maximum_only = preview.power.is_some()
+        || !preview.power_settings.is_empty()
+        || !preview.services.is_empty()
+        || !preview.close_apps.is_empty();
     if (preview.pagefile_to_automatic && preview.preset == Preset::Safe)
-        || (preview.power.is_some() && preview.preset != Preset::MaximumFps)
+        || (preview.trim_memory && preview.preset == Preset::Safe)
+        || (maximum_only && preview.preset != Preset::MaximumFps)
+        || (!preview.services.is_empty() && !elevated_now)
     {
         return Err("O plano contém uma alteração incompatível.".into());
     }
-    let allowed = profile_changes(&capabilities, preview.preset);
+    if preview.facts.elevated && !elevated_now {
+        return Err("O aplicativo não está mais como administrador. Faça uma nova análise.".into());
+    }
+    let allowed = profile_changes(&capabilities, preview.preset, &preview.facts);
     for entry in &preview.journal.entries {
         if !allowed.contains(&(entry.setting, entry.applied.clone())) {
             return Err("O plano contém uma alteração incompatível.".into());
@@ -274,7 +418,7 @@ mod tests {
             Facts::default(),
         )
         .unwrap();
-        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        apply(&mut backend, &mut store, version, &view, false).unwrap();
         assert_eq!(backend.0.len(), 2);
         assert_eq!(restore(&mut backend, &mut store).unwrap().restored.len(), 2);
         assert!(backend.0.is_empty());
@@ -306,7 +450,7 @@ mod tests {
                 .any(|note| note.contains("manual") && note.contains("gerenciamento automático"))
         );
         assert!(backend.0.is_empty() && store.0.is_none());
-        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        apply(&mut backend, &mut store, version, &view, false).unwrap();
         restore(&mut backend, &mut store).unwrap();
         let automatic = preview(
             &mut backend,
@@ -403,8 +547,8 @@ mod tests {
                 .unwrap()
                 .clone(),
         );
-        assert!(apply(&mut backend, &mut store, version, &tampered, None).is_err());
-        apply(&mut backend, &mut store, version, &balanced, None).unwrap();
+        assert!(apply(&mut backend, &mut store, version, &tampered, false).is_err());
+        apply(&mut backend, &mut store, version, &balanced, false).unwrap();
         assert_eq!(backend.0[&Setting::DropShadows], Value::dword(0));
         restore(&mut backend, &mut store).unwrap();
         assert_eq!(backend.0[&Setting::DropShadows], Value::dword(1));
@@ -441,7 +585,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(view.journal.entries.len(), 11);
-        apply(&mut backend, &mut store, version, &view, None).unwrap();
+        apply(&mut backend, &mut store, version, &view, false).unwrap();
         restore(&mut backend, &mut store).unwrap();
         assert_eq!(backend.0, before);
     }
@@ -515,9 +659,16 @@ mod tests {
             pagefile: Some(Management::Manual),
             power: Some(change),
             memory_integrity: Some(true),
+            ..Facts::default()
         };
-        let maximum =
-            preview(&mut backend, &mut store, version, Preset::MaximumFps, facts).unwrap();
+        let maximum = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::MaximumFps,
+            facts.clone(),
+        )
+        .unwrap();
         assert!(maximum.pagefile_to_automatic);
         assert_eq!(maximum.power.unwrap().to, HIGH_PERFORMANCE);
         assert!(
@@ -534,12 +685,19 @@ mod tests {
                 .any(|n| n.contains("Integridade de memória"))
         );
         // Balanced never carries a power change, even with the same facts.
-        let balanced = preview(&mut backend, &mut store, version, Preset::Balanced, facts).unwrap();
+        let balanced = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::Balanced,
+            facts.clone(),
+        )
+        .unwrap();
         assert!(balanced.power.is_none());
         let mut tampered = balanced.clone();
         tampered.power = maximum.power;
-        assert!(apply(&mut backend, &mut store, version, &tampered, None).is_err());
-        apply(&mut backend, &mut store, version, &maximum, None).unwrap();
+        assert!(apply(&mut backend, &mut store, version, &tampered, false).is_err());
+        apply(&mut backend, &mut store, version, &maximum, false).unwrap();
         assert_eq!(backend.0[&Setting::BackgroundRecording], Value::dword(0));
         restore(&mut backend, &mut store).unwrap();
         assert!(!backend.0.contains_key(&Setting::BackgroundRecording));
@@ -568,10 +726,7 @@ mod tests {
     #[test]
     #[ignore = "Reads the local Windows configuration"]
     fn real_machine_preview_is_read_only() {
-        use crate::{
-            storage::FileStore, windows_power::WindowsPowerProfile,
-            windows_registry::WindowsRegistry,
-        };
+        use crate::{storage::FileStore, windows_registry::WindowsRegistry};
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -580,12 +735,8 @@ mod tests {
             .join("target")
             .join(format!("real-preview-{unique}"));
         let version = crate::compatibility::detect().unwrap();
-        let facts = Facts {
-            pagefile: // Direct query: the guarded variant refuses concurrent callers.
-            crate::pagefile::detect().ok(),
-            power: power_profile::plan(&mut WindowsPowerProfile).ok(),
-            memory_integrity: crate::windows_registry::memory_integrity_enabled(),
-        };
+        // Direct pagefile query: the guarded variant refuses concurrent callers.
+        let facts = crate::system_facts::gather_using(Preset::MaximumFps, crate::pagefile::detect);
         println!("{version:?} {facts:?}");
         {
             let mut store = FileStore::acquire(directory.clone()).unwrap();
@@ -595,7 +746,7 @@ mod tests {
                     &mut store,
                     version,
                     preset,
-                    facts,
+                    facts.clone(),
                 )
                 .unwrap();
                 println!(
@@ -619,5 +770,100 @@ mod tests {
             assert!(Store::load(&mut store).unwrap().is_none());
         }
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn maximum_includes_booster_features_only_with_administrator() {
+        let version = WindowsVersion {
+            major: 10,
+            build: 22621,
+            workstation: true,
+        };
+        let elevated = Facts {
+            elevated: true,
+            adapters: vec![(7, true), (9, false)],
+            services: vec![service_config::Service::SysMain],
+            background: vec!["OneDrive"],
+            power_settings: vec![power_settings::Setting::PcieLinkPower],
+            ..Facts::default()
+        };
+        let mut backend = Fake::default();
+        let mut store = Memory::default();
+        let view = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::MaximumFps,
+            elevated.clone(),
+        )
+        .unwrap();
+        let has = |setting| view.journal.entries.iter().any(|e| e.setting == setting);
+        for setting in [
+            Setting::NtfsLastAccess,
+            Setting::PerformanceCounters,
+            Setting::GameDvr,
+            Setting::AppCapture,
+            Setting::AdapterEnergyEfficient(7),
+            Setting::AdapterPowerManagement(7),
+            Setting::AdapterPowerManagement(9),
+        ] {
+            assert!(has(setting), "{setting:?}");
+        }
+        assert!(!has(Setting::AdapterEnergyEfficient(9)));
+        assert_eq!(view.services, vec![service_config::Service::SysMain]);
+        assert_eq!(view.close_apps, vec!["OneDrive"]);
+        assert!(view.trim_memory && !view.power_settings.is_empty());
+        assert!(view.notes.iter().any(|n| n.contains("Windows Defender")));
+        // Losing administrator rights invalidates the plan.
+        assert!(apply(&mut backend, &mut store, version, &view, false).is_err());
+        apply(&mut backend, &mut store, version, &view, true).unwrap();
+        assert_eq!(
+            backend.0[&Setting::AdapterEnergyEfficient(7)],
+            Value::string("0")
+        );
+        restore(&mut backend, &mut store).unwrap();
+        assert!(!backend.0.contains_key(&Setting::AdapterPowerManagement(9)));
+        // Without administrator rights the machine-wide items are left out.
+        let user = Facts {
+            elevated: false,
+            ..elevated.clone()
+        };
+        let view = preview(&mut backend, &mut store, version, Preset::MaximumFps, user).unwrap();
+        assert!(
+            view.journal
+                .entries
+                .iter()
+                .all(|e| !e.setting.requires_administrator())
+        );
+        assert!(view.services.is_empty());
+        assert!(
+            view.notes
+                .iter()
+                .any(|n| n.contains("Exigem administrador"))
+        );
+        // Balanced never closes programs nor changes services or adapters.
+        let balanced = preview(
+            &mut backend,
+            &mut store,
+            version,
+            Preset::Balanced,
+            elevated,
+        )
+        .unwrap();
+        assert!(balanced.close_apps.is_empty() && balanced.services.is_empty());
+        assert!(
+            balanced
+                .journal
+                .entries
+                .iter()
+                .any(|e| e.setting == Setting::NtfsLastAccess)
+        );
+        assert!(
+            !balanced
+                .journal
+                .entries
+                .iter()
+                .any(|e| e.setting == Setting::PerformanceCounters)
+        );
+        assert!(balanced.power_settings.is_empty());
     }
 }
